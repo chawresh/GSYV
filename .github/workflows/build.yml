@@ -13,14 +13,14 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.x'
+        python-version: '3.11'  # Daha spesifik bir Python sürümü belirttim
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyinstaller pandas numpy sqlite3 PyQt5 qtawesome reportlab 
+        pip install pyinstaller pandas numpy PyQt5 qtawesome reportlab
     - name: Build EXE
       run: |
-        pyinstaller --onefile --noconsole --icon=logo.ico "GSYV ENVANTER SİSTEMİ.py"
+        pyinstaller --onefile --noconsole --icon=logo.ico --hidden-import=PyQt5.QtWidgets --hidden-import=PyQt5.QtGui --hidden-import=PyQt5.QtCore --hidden-import=qtawesome --hidden-import=reportlab "GSYV ENVANTER SİSTEMİ.py"
     - name: Upload EXE
       uses: actions/upload-artifact@v4
       with:

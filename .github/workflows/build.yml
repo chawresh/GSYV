@@ -17,7 +17,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyinstaller
+        pip install pyinstaller pandas numpy sqlite3 PyQt5 qtawesome reportlab 
     - name: Build EXE
       run: |
         pyinstaller --onefile --noconsole --icon=logo.ico "GSYV ENVANTER SİSTEMİ.py"

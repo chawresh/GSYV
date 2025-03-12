@@ -1711,42 +1711,107 @@ class InventoryApp(QMainWindow):
                 doc = SimpleDocTemplate(file_name, pagesize=A4)
                 elements = []
                 styles = getSampleStyleSheet()
-                title_style = styles['Heading1']
-                title_style.alignment = 1
-                title_style.fontName = self.default_font
 
-                title = Paragraph(TRANSLATIONS["details_title"], title_style)
+                # Kurum başlığını şekillendir (generate_pdf_report ile aynı stil)
+                title_style = ParagraphStyle(
+                    'TitleStyle',
+                    parent=styles['Heading1'],
+                    fontName=self.default_font,
+                    fontSize=16,
+                    textColor=colors.darkred,
+                    alignment=1,
+                    spaceAfter=10,
+                    borderWidth=1,
+                    borderColor=colors.black,
+                    borderPadding=5
+                )
+                title = Paragraph(TRANSLATIONS["title"], title_style)
                 elements.append(title)
-                elements.append(Spacer(1, 0.5 * cm))
 
+                # Kurum adresleri ve oluşturulma tarihi (generate_pdf_report ile aynı stil)
+                address_style = ParagraphStyle(
+                    'AddressStyle',
+                    parent=styles['Normal'],
+                    fontName=self.default_font,
+                    fontSize=10,
+                    textColor=colors.black,
+                    alignment=1,
+                    spaceAfter=5
+                )
+                address_text = (
+                    "Florya, Şenlikköy Mh. Orman Sk. No:39/1 Florya Bakırköy/İstanbul<br/>"
+                    "E-posta: bilgi@gsyardimlasmavakfi.org | Telefon: (0212) 574 52 55"
+                )
+                address = Paragraph(address_text, address_style)
+                elements.append(address)
+
+                date_style = ParagraphStyle(
+                    'DateStyle',
+                    parent=styles['Normal'],
+                    fontName=self.default_font,
+                    fontSize=9,
+                    textColor=colors.grey,
+                    alignment=1,
+                    spaceAfter=10
+                )
+                creation_date = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+                date_text = f"Oluşturulma Tarihi: {creation_date}"
+                date = Paragraph(date_text, date_style)
+                elements.append(date)
+
+                # Logo ekle (varsa)
                 if os.path.exists(LOGO_FILE):
                     logo = Image(LOGO_FILE, width=2 * cm, height=2 * cm)
+                    logo.hAlign = 'CENTER'
                     elements.append(logo)
                     elements.append(Spacer(1, 0.5 * cm))
 
+                # Detay başlığı (generate_pdf_report ile uyumlu başlık)
+                detail_title_style = ParagraphStyle(
+                    'DetailTitleStyle',
+                    parent=styles['Heading2'],
+                    fontName=self.default_font,
+                    fontSize=12,
+                    textColor=colors.black,
+                    alignment=1,
+                    spaceAfter=10
+                )
+
+
+                # Tablo verilerini hazırla (generate_pdf_report ile aynı stil)
                 table_data = [["Alan", "Değer"]]
                 for header, value in zip(headers, data):
-                    if header != TRANSLATIONS["photo"]:
-                        table_data.append([header, value])
-                    elif value:
-                        elements.append(Paragraph("Demirbaş Fotoğrafı:", styles['Heading2']))
-                        elements.append(Image(value, width=5 * cm, height=5 * cm))
-                        elements.append(Spacer(1, 0.5 * cm))
+                    if header != TRANSLATIONS["photo"]:  # Fotoğrafı tabloya eklemiyoruz, zaten üstte gösterdik
+                        table_data.append([header, value or "Bilgi Yok"])
 
-                table = Table(table_data)
-                table.setStyle(TableStyle([
+                # Tablo stilini tanımla (generate_pdf_report ile aynı)
+                table_style = TableStyle([
                     ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),  # Fotoğraf olmadığı için sola hizalama
                     ('FONTNAME', (0, 0), (-1, -1), self.default_font),
-                    ('FONTSIZE', (0, 0), (-1, -1), 10),
-                    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                    ('FONTSIZE', (0, 0), (-1, 0), 10),
+                    ('FONTSIZE', (0, 1), (-1, -1), 9),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                    ('TOPPADDING', (0, 0), (-1, -1), 6),
                     ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
                     ('GRID', (0, 0), (-1, -1), 1, colors.black),
                     ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ]))
+                    ('LEFTPADDING', (0, 0), (-1, -1), 4),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+                    ('WORDWRAP', (0, 0), (-1, -1), True),
+                ])
+
+                # Tablo sütun genişliklerini dinamik ayarla
+                page_width = A4[0] - 2 * cm  # Sayfanın kullanılabilir genişliği
+                col_widths = [page_width * 0.3, page_width * 0.7]  # Alan ve Değer sütunları için oranlar
+
+                # Tabloyu oluştur
+                table = Table(table_data, colWidths=col_widths)
+                table.setStyle(table_style)
                 elements.append(table)
 
+                # PDF'i oluştur
                 doc.build(elements)
                 QMessageBox.information(self, "Başarılı", "Detaylar PDF olarak kaydedildi!")
                 logging.info(f"Detaylar PDF olarak {file_name} dosyasına kaydedildi.")

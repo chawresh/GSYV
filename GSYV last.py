@@ -4,14 +4,15 @@ import json
 import pandas as pd
 import qtawesome as qta
 import platform
+import uuid
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QTableWidget, QTableWidgetItem, QPushButton, QLineEdit, QGroupBox,
                              QFileDialog, QInputDialog, QLabel, QMessageBox, QDialog,
                              QFormLayout, QDialogButtonBox, QComboBox, QTextEdit,
                              QTabWidget, QMenu, QSpinBox, QCheckBox, QAbstractItemView, QDateEdit,
-                             QListWidget, QListWidgetItem)
+                             QListWidget, QListWidgetItem, QProgressDialog)
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QFont, QPixmap, QTextOption, QCursor
+from PyQt5.QtGui import QFont, QPixmap, QTextOption
 import os
 import shutil
 import logging
@@ -29,7 +30,6 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import mplcursors
 
-
 # Log ayarları
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FILES_DIR = os.path.join(BASE_DIR, "files")
@@ -45,6 +45,8 @@ DB_FILE = os.path.join(FILES_DIR, "inventory.db")
 LOGO_FILE = os.path.join(FILES_DIR, "logo.png")
 REGIONS_FILE = os.path.join(FILES_DIR, "regions.json")
 FLOORS_FILE = os.path.join(FILES_DIR, "floors.json")
+PHOTO_DIR = os.path.join(FILES_DIR, "photos")
+os.makedirs(PHOTO_DIR, exist_ok=True)
 
 # Türkçe çeviriler
 TRANSLATIONS = {
@@ -93,6 +95,7 @@ TRANSLATIONS = {
     "data_analysis": "Veri Analizi",
     "param_management": "Parametre Yönetimi",
     "backup_operations": "Yedekleme İşlemleri",
+    "restore_backup": "Yedeği Geri Yükle",
     "analysis_title": "Veri Analizi",
     "total_records": "Toplam Kayıt Sayısı: {}",
     "group_distribution": "Demirbaş Cinsi Dağılımı",
@@ -139,7 +142,11 @@ TRANSLATIONS = {
     "param_type": "Parametre Türü:",
     "combobox_file": "ComboBox Veri Dosyası:",
     "export_charts": "Grafikleri Dışa Aktar",
-    "export_analysis_data": "Analiz Verilerini Dışa Aktar"
+    "export_analysis_data": "Analiz Verilerini Dışa Aktar",
+    "confirm_restore_1": "Seçilen yedeği geri yüklemek istediğinizden emin misiniz? Mevcut veritabanı değiştirilecektir.",
+    "confirm_restore_2": "Bu işlem mevcut verilerinizi değiştirebilir. Devam etmek istiyor musunuz?",
+    "confirm_restore_3": "Son onay: Geri yükleme işlemi geri alınamaz. Onaylıyor musunuz?",
+    "restore_success": "Yedek başarıyla geri yüklendi!"
 }
 
 DEFAULT_GROUPS = [
@@ -166,6 +173,28 @@ DEFAULT_FLOORS = [
     {"name": "Kat 4", "code": "K04"},
     {"name": "Kat 5", "code": "K05"}
 ]
+
+class ColumnSelectionDialog(QDialog):
+    def __init__(self, headers, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Sütun Seçimi")
+        self.headers = headers
+        self.checkboxes = {}
+
+        layout = QVBoxLayout(self)
+        for header in headers:
+            checkbox = QCheckBox(header)
+            checkbox.setChecked(True)
+            self.checkboxes[header] = checkbox
+            layout.addWidget(checkbox)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_selected_columns(self):
+        return [header for header, checkbox in self.checkboxes.items() if checkbox.isChecked()]
 
 class AddParameterDialog(QDialog):
     def __init__(self, parent=None):
@@ -334,9 +363,16 @@ class ComboBoxEditDialog(QDialog):
                 self.save_items()
 
     def save_items(self):
-        with open(self.file_path, 'w', encoding='utf-8') as f:
-            json.dump(self.items, f, ensure_ascii=False, indent=4)
-        self.parent.update_comboboxes()
+        try:
+            with open(self.file_path, 'w', encoding='utf-8') as f:
+                json.dump(self.items, f, ensure_ascii=False, indent=4)
+            self.parent.update_comboboxes()
+        except PermissionError as e:
+            logging.error(f"{self.file_path} kaydedilirken izin hatası: {str(e)}")
+            QMessageBox.critical(self, "Hata", f"Dosyaya yazma izni yok: {self.file_path}")
+        except IOError as e:
+            logging.error(f"{self.file_path} kaydedilirken hata: {str(e)}")
+            QMessageBox.critical(self, "Hata", f"Dosya yazılamadı: {self.file_path}")
 
 class EditDialog(QDialog):
     def __init__(self, parent=None, row_data=None, headers=None):
@@ -346,32 +382,22 @@ class EditDialog(QDialog):
         self.headers = headers or []
         self.entries = {}
 
-        # Veritabanından tam veriyi al
         cursor = self.parent.conn.cursor()
-        
-        # row_data'nın türüne göre row_id ve veri işleme
         if row_data:
-            if isinstance(row_data[0], QTableWidgetItem):  # Tablo öğesi ise
+            if isinstance(row_data[0], QTableWidgetItem):
                 row_id = row_data[0].data(Qt.UserRole)
                 cursor.execute("SELECT data FROM inventory WHERE id = ?", (row_id,))
                 full_data = json.loads(cursor.fetchone()[0])
-            elif isinstance(row_data[0], str):  # String listesi ise (restore_archive_item'dan gelir)
+            elif isinstance(row_data[0], str):
                 full_data = row_data
-                row_id = None  # restore_archive_item zaten full_data'yı sağlıyor, row_id gerekmeyebilir
             else:
                 raise ValueError("EditDialog: row_data beklenmeyen bir türde.")
         else:
             full_data = [""] * len(self.headers)
-            row_id = None
-            logging.warning("EditDialog: row_data None, boş veri seti kullanılıyor.")
 
-        # full_data'nın headers ile uyumlu olduğundan emin olalım
         self.row_data = full_data if len(full_data) >= len(self.headers) else full_data + [""] * (len(self.headers) - len(full_data))
         if len(self.row_data) > len(self.headers):
             self.row_data = self.row_data[:len(self.headers)]
-
-        logging.info(f"EditDialog: headers={self.headers}")
-        logging.info(f"EditDialog: row_data={self.row_data}")
 
         layout = QFormLayout(self)
         cursor.execute("SELECT column_name, type, combobox_file FROM metadata ORDER BY column_order")
@@ -382,7 +408,6 @@ class EditDialog(QDialog):
             label = QLabel(header)
             param_type, combobox_file = param_types.get(header, ("Metin", None))
             current_value = self.row_data[i]
-            logging.info(f"EditDialog: '{header}' için current_value={current_value}, param_type={param_type}")
 
             if header == "Demirbaş Kodu":
                 entry = QLineEdit(current_value)
@@ -483,8 +508,18 @@ class EditDialog(QDialog):
     def select_photo(self, entry):
         file_name, _ = QFileDialog.getOpenFileName(self, "Fotoğraf Seç", "", "Resim Dosyaları (*.png *.jpg *.jpeg)")
         if file_name:
-            entry.setText(file_name)
-            logging.info(f"EditDialog'da 'Demirbaş Fotoğrafı' için seçilen dosya: {file_name}")
+            # Benzersiz bir isim oluştur
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            unique_id = uuid.uuid4().hex[:8]
+            extension = os.path.splitext(file_name)[1]
+            new_file_name = os.path.join(PHOTO_DIR, f"photo_{timestamp}_{unique_id}{extension}")
+            try:
+                shutil.copy2(file_name, new_file_name)
+                entry.setText(os.path.relpath(new_file_name, BASE_DIR))
+                logging.info(f"Fotoğraf {new_file_name} olarak kopyalandı.")
+            except IOError as e:
+                logging.error(f"Fotoğraf kopyalanamadı: {str(e)}")
+                QMessageBox.critical(self, "Hata", f"Fotoğraf kopyalanamadı: {str(e)}")
 
     def get_data(self):
         data = []
@@ -508,8 +543,6 @@ class EditDialog(QDialog):
                 data.append(value)
             else:
                 data.append("")
-                logging.warning(f"EditDialog'da '{header}' için entry bulunamadı.")
-        logging.info(f"EditDialog: Güncellenmiş veri={data}")
         return data
 
 class InventoryApp(QMainWindow):
@@ -538,16 +571,24 @@ class InventoryApp(QMainWindow):
         self.setWindowTitle(TRANSLATIONS["title"])
         self.setGeometry(100, 100, 1200, 700)
 
-        os.makedirs(FILES_DIR, exist_ok=True)
-
         self.db_exists = os.path.exists(DB_FILE)
         if self.db_exists:
-            self.conn = sqlite3.connect(DB_FILE)
-            logging.info("Mevcut veritabanı bulundu ve bağlanıldı.")
+            try:
+                self.conn = sqlite3.connect(DB_FILE)
+                logging.info("Mevcut veritabanı bulundu ve bağlanıldı.")
+            except sqlite3.Error as e:
+                logging.error(f"Veritabanına bağlanılamadı: {str(e)}")
+                QMessageBox.critical(self, "Hata", f"Veritabanına bağlanılamadı: {str(e)}")
+                sys.exit(1)
         else:
-            self.conn = sqlite3.connect(DB_FILE)
-            self.db_exists = True
-            logging.info("Veritabanı bulunamadı, yeni bir veritabanı oluşturuldu.")
+            try:
+                self.conn = sqlite3.connect(DB_FILE)
+                self.db_exists = True
+                logging.info("Veritabanı bulunamadı, yeni bir veritabanı oluşturuldu.")
+            except sqlite3.Error as e:
+                logging.error(f"Veritabanı oluşturulamadı: {str(e)}")
+                QMessageBox.critical(self, "Hata", f"Veritabanı oluşturulamadı: {str(e)}")
+                sys.exit(1)
         self.create_or_update_tables()
 
         self.load_config()
@@ -601,16 +642,25 @@ class InventoryApp(QMainWindow):
                     return json.load(f)
         except (json.JSONDecodeError, IOError) as e:
             logging.error(f"{file_path} yüklenirken hata: {str(e)}")
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(default_data, f, ensure_ascii=False, indent=4)
+            QMessageBox.critical(self, "Hata", f"Dosya yüklenemedi: {file_path}")
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(default_data, f, ensure_ascii=False, indent=4)
+        except IOError as e:
+            logging.error(f"{file_path} kaydedilirken hata: {str(e)}")
+            QMessageBox.critical(self, "Hata", f"Dosya yazılamadı: {file_path}")
         return default_data
 
     def save_json_data(self, file_path, data):
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
+        except PermissionError as e:
+            logging.error(f"{file_path} kaydedilirken izin hatası: {str(e)}")
+            QMessageBox.critical(self, "Hata", f"Dosyaya yazma izni yok: {file_path}")
         except IOError as e:
             logging.error(f"{file_path} kaydedilirken hata: {str(e)}")
+            QMessageBox.critical(self, "Hata", f"Dosya yazılamadı: {file_path}")
 
     def generate_shortcode(self, name, existing_codes):
         shortcode = name[:3].upper()
@@ -789,6 +839,7 @@ class InventoryApp(QMainWindow):
                     continue
                 else:
                     entry = QLineEdit()
+                    entry.textChanged.connect(lambda text, h=header: self.validate_field(h, text))
                     self.card_entries[header] = entry
             self.card_layout.addRow(label, self.card_entries[header])
         self.card_group.setLayout(self.card_layout)
@@ -915,6 +966,7 @@ class InventoryApp(QMainWindow):
         self.table.setHorizontalHeaderLabels(visible_headers)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSortingEnabled(True)
         self.table.itemDoubleClicked.connect(self.show_details)
         layout.addWidget(self.table)
 
@@ -981,6 +1033,12 @@ class InventoryApp(QMainWindow):
 
         layout.addLayout(button_layout)
 
+    def validate_field(self, header, text):
+        if header == TRANSLATIONS["item_name"] and not text.strip():
+            self.card_entries[header].setStyleSheet("border: 1px solid red;")
+        else:
+            self.card_entries[header].setStyleSheet("")
+
     def toggle_donor(self, entry, state):
         entry.setEnabled(state == Qt.Unchecked)
         if state == Qt.Checked:
@@ -994,8 +1052,18 @@ class InventoryApp(QMainWindow):
     def select_photo(self, entry):
         file_name, _ = QFileDialog.getOpenFileName(self, "Fotoğraf Seç", "", "Resim Dosyaları (*.png *.jpg *.jpeg)")
         if file_name:
-            entry.setText(file_name)
-            logging.info(f"InventoryApp'da 'Demirbaş Fotoğrafı' için seçilen dosya: {file_name}")
+            # Benzersiz bir isim oluştur
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            unique_id = uuid.uuid4().hex[:8]
+            extension = os.path.splitext(file_name)[1]
+            new_file_name = os.path.join(PHOTO_DIR, f"photo_{timestamp}_{unique_id}{extension}")
+            try:
+                shutil.copy2(file_name, new_file_name)
+                entry.setText(os.path.relpath(new_file_name, BASE_DIR))
+                logging.info(f"Fotoğraf {new_file_name} olarak kopyalandı.")
+            except IOError as e:
+                logging.error(f"Fotoğraf kopyalanamadı: {str(e)}")
+                QMessageBox.critical(self, "Hata", f"Fotoğraf kopyalanamadı: {str(e)}")
 
     def setup_archive_tab(self):
         if self.archive_tab.layout() is not None:
@@ -1014,6 +1082,7 @@ class InventoryApp(QMainWindow):
         self.archive_table.setHorizontalHeaderLabels(visible_headers)
         self.archive_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.archive_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.archive_table.setSortingEnabled(True)
         layout.addWidget(self.archive_table)
 
         button_layout = QHBoxLayout()
@@ -1090,6 +1159,16 @@ class InventoryApp(QMainWindow):
         self.retention_spin.setValue(self.config["backup_retention"])
         self.retention_spin.valueChanged.connect(self.update_backup_retention)
         backup_layout.addRow(QLabel(TRANSLATIONS["backup_retention"]), self.retention_spin)
+
+        self.restore_combo = QComboBox()
+        backups = sorted(glob.glob(os.path.join(self.config["backup_path"], "inventory_backup_*.db")), key=os.path.getctime, reverse=True)
+        self.restore_combo.addItems([os.path.basename(b) for b in backups[:10]])
+        backup_layout.addRow(QLabel(TRANSLATIONS["restore_backup"]), self.restore_combo)
+
+        self.restore_button = QPushButton(TRANSLATIONS["restore_item"])
+        self.restore_button.clicked.connect(self.restore_backup)
+        backup_layout.addRow("", self.restore_button)
+
         backup_group.setLayout(backup_layout)
         layout.addWidget(backup_group)
 
@@ -1235,8 +1314,7 @@ class InventoryApp(QMainWindow):
         self.save_config()
 
     def save_config(self):
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.config, f, ensure_ascii=False, indent=4)
+        self.save_json_data(CONFIG_FILE, self.config)
 
     def change_font_size(self, size):
         font = QFont(self.default_font, size)
@@ -1320,55 +1398,62 @@ class InventoryApp(QMainWindow):
                                     "Tüm ayarlar varsayılan değerlerine sıfırlandı.")
 
     def load_data_from_db(self):
-        headers = self.get_column_headers()  # Dinamik headers alımı
+        headers = self.get_column_headers()
         visible_headers = [h for h in headers if h != TRANSLATIONS["photo"]] + ["Son Güncelleme"]
         self.table.setColumnCount(len(visible_headers))
         self.table.setHorizontalHeaderLabels(visible_headers)
 
         cursor = self.conn.cursor()
-        cursor.execute("SELECT id, data, timestamp FROM inventory")
-        rows = cursor.fetchall()
-        self.table.setRowCount(len(rows))
+        try:
+            cursor.execute("SELECT id, data, timestamp FROM inventory")
+            rows = cursor.fetchall()
+            self.table.setRowCount(len(rows))
 
-        for row_idx, (row_id, data_json, timestamp) in enumerate(rows):
-            data = json.loads(data_json)
-            # headers ile data uzunluğunu eşitle
-            if len(data) < len(headers):
-                data.extend([""] * (len(headers) - len(data)))
-            elif len(data) > len(headers):
-                data = data[:len(headers)]
+            for row_idx, (row_id, data_json, timestamp) in enumerate(rows):
+                data = json.loads(data_json)
+                if len(data) < len(headers):
+                    data.extend([""] * (len(headers) - len(data)))
+                elif len(data) > len(headers):
+                    data = data[:len(headers)]
 
-            for col_idx, header in enumerate(visible_headers):
-                if header == "Son Güncelleme":
-                    item = QTableWidgetItem(timestamp)
-                else:
-                    header_idx = headers.index(header) if header in headers else -1
-                    value = data[header_idx] if header_idx != -1 else ""
-                    item = QTableWidgetItem(value)
-                item.setData(Qt.UserRole, row_id)  # row_id sakla
-                self.table.setItem(row_idx, col_idx, item)
+                for col_idx, header in enumerate(visible_headers):
+                    if header == "Son Güncelleme":
+                        item = QTableWidgetItem(timestamp)
+                    else:
+                        header_idx = headers.index(header) if header in headers else -1
+                        value = data[header_idx] if header_idx != -1 else ""
+                        item = QTableWidgetItem(value)
+                    item.setData(Qt.UserRole, row_id)
+                    self.table.setItem(row_idx, col_idx, item)
 
-        self.table.resizeColumnsToContents()
-        logging.info(f"load_data_from_db: Tablo {len(rows)} satırla güncellendi, headers={visible_headers}")
+            self.table.resizeColumnsToContents()
+            logging.info(f"load_data_from_db: Tablo {len(rows)} satırla güncellendi.")
+        except sqlite3.Error as e:
+            logging.error(f"Veritabanından veri yüklenemedi: {str(e)}")
+            QMessageBox.critical(self, "Hata", f"Veritabanından veri yüklenemedi: {str(e)}")
 
     def load_archive_from_db(self):
         cursor = self.conn.cursor()
-        cursor.execute("SELECT id, data, timestamp FROM archive")
-        rows = cursor.fetchall()
-        headers = self.get_column_headers()
-        visible_headers = [h for h in headers if h != TRANSLATIONS["photo"]]
-        self.archive_table.setRowCount(len(rows))
-        self.archive_table.setColumnCount(len(visible_headers) + 1)
-        self.archive_table.setHorizontalHeaderLabels(visible_headers + ["Son Güncelleme"])
-        for row_idx, (row_id, row_data, timestamp) in enumerate(rows):
-            data = json.loads(row_data)
-            if len(data) < len(headers):
-                data.extend([""] * (len(headers) - len(data)))
-            for col, value in enumerate([data[headers.index(h)] for h in visible_headers]):
-                self.archive_table.setItem(row_idx, col, QTableWidgetItem(str(value)))
-            self.archive_table.setItem(row_idx, len(visible_headers), QTableWidgetItem(timestamp))
-            if self.archive_table.item(row_idx, 0):
-                self.archive_table.item(row_idx, 0).setData(Qt.UserRole, row_id)
+        try:
+            cursor.execute("SELECT id, data, timestamp FROM archive")
+            rows = cursor.fetchall()
+            headers = self.get_column_headers()
+            visible_headers = [h for h in headers if h != TRANSLATIONS["photo"]]
+            self.archive_table.setRowCount(len(rows))
+            self.archive_table.setColumnCount(len(visible_headers) + 1)
+            self.archive_table.setHorizontalHeaderLabels(visible_headers + ["Son Güncelleme"])
+            for row_idx, (row_id, row_data, timestamp) in enumerate(rows):
+                data = json.loads(row_data)
+                if len(data) < len(headers):
+                    data.extend([""] * (len(headers) - len(data)))
+                for col, value in enumerate([data[headers.index(h)] for h in visible_headers]):
+                    self.archive_table.setItem(row_idx, col, QTableWidgetItem(str(value)))
+                self.archive_table.setItem(row_idx, len(visible_headers), QTableWidgetItem(timestamp))
+                if self.archive_table.item(row_idx, 0):
+                    self.archive_table.item(row_idx, 0).setData(Qt.UserRole, row_id)
+        except sqlite3.Error as e:
+            logging.error(f"Arşiv veritabanından veri yüklenemedi: {str(e)}")
+            QMessageBox.critical(self, "Hata", f"Arşiv veritabanından veri yüklenemedi: {str(e)}")
 
     def add_item(self):
         headers = self.get_column_headers()
@@ -1384,7 +1469,7 @@ class InventoryApp(QMainWindow):
                     if f"{header}_check" in self.card_entries and self.card_entries[f"{header}_check"].isChecked():
                         value = ""
                     else:
-                        value = self.card_entries[header].text()  # Doğru QLineEdit'ten alınır
+                        value = self.card_entries[header].text()
                 else:
                     value = self.get_widget_value(self.card_entries[header])
             elif header in self.invoice_entries:
@@ -1403,12 +1488,6 @@ class InventoryApp(QMainWindow):
             else:
                 value = ""
             data.append(value)
-            logging.info(f"add_item: '{header}' için toplanan veri: {value}")
-
-        if len(data) != len(headers):
-            logging.error(f"Data uzunluğu ({len(data)}) ile headers uzunluğu ({len(headers)}) uyuşmuyor!")
-            QMessageBox.critical(self, "Hata", "Veri ve başlık sayısı uyuşmuyor. Lütfen geliştirici ile iletişime geçin.")
-            return
 
         group_name_idx = headers.index(TRANSLATIONS["group_name"]) if TRANSLATIONS["group_name"] in headers else -1
         item_name_idx = headers.index(TRANSLATIONS["item_name"]) if TRANSLATIONS["item_name"] in headers else -1
@@ -1425,114 +1504,112 @@ class InventoryApp(QMainWindow):
         floor_name = data[floor_idx] if floor_idx != -1 and floor_idx < len(data) else ""
         inventory_code = self.generate_inventory_code(group_name, region_name, floor_name)
 
-        if code_idx != -1:
+        if code_idx != -1 and code_idx < len(data):
             data[code_idx] = inventory_code
-        else:
-            cursor = self.conn.cursor()
-            cursor.execute("SELECT MAX(column_order) FROM metadata")
-            max_order = cursor.fetchone()[0] or 0
-            cursor.execute("INSERT INTO metadata (column_name, column_order, section) VALUES (?, ?, ?)",
-                           ("Demirbaş Kodu", 0, TRANSLATIONS["card_info"]))
-            self.conn.commit()
-            headers.insert(0, "Demirbaş Kodu")
-            data.insert(0, inventory_code)
-            self.setup_inventory_tab()
 
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor = self.conn.cursor()
-        cursor.execute("INSERT INTO inventory (data, timestamp) VALUES (?, ?)", (json.dumps(data), timestamp))
-        self.conn.commit()
-        self.load_data_from_db()
-        QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_added"] + f"\nDemirbaş Kodu: {inventory_code}")
-        for entry in list(self.card_entries.values()) + list(self.invoice_entries.values()) + list(self.service_entries.values()):
-            if isinstance(entry, QLineEdit):
-                entry.clear()
-            elif isinstance(entry, QDateEdit):
-                entry.setDate(datetime.now().date())
-            elif isinstance(entry, QTextEdit):
-                entry.clear()
-            elif isinstance(entry, QCheckBox):
-                entry.setChecked(False)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            cursor.execute("INSERT INTO inventory (data, timestamp) VALUES (?, ?)", (json.dumps(data), timestamp))
+            self.conn.commit()
+            QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_added"])
+            logging.info(f"Yeni envanter eklendi: {inventory_code}")
+            self.load_data_from_db()
 
-    def open_edit_dialog(self, item=None):
+            # Formu temizle
+            for entry in self.card_entries.values():
+                if isinstance(entry, QLineEdit) and entry != self.card_entries["Demirbaş Kodu"]:
+                    entry.clear()
+                elif isinstance(entry, QComboBox):
+                    entry.setCurrentIndex(0)
+                elif isinstance(entry, QTextEdit):
+                    entry.clear()
+            for entry in self.invoice_entries.values():
+                if isinstance(entry, QLineEdit):
+                    entry.clear()
+                elif isinstance(entry, QTextEdit):
+                    entry.clear()
+            for entry in self.service_entries.values():
+                if isinstance(entry, QLineEdit):
+                    entry.clear()
+                elif isinstance(entry, QTextEdit):
+                    entry.clear()
+            self.card_entries["Demirbaş Kodu"].setText("Otomatik")
+        except sqlite3.Error as e:
+            logging.error(f"Envanter eklenirken hata: {str(e)}")
+            QMessageBox.critical(self, "Hata", f"Envanter eklenemedi: {str(e)}")
+
+    def open_edit_dialog(self):
         selected = self.table.currentRow()
         if selected < 0:
             QMessageBox.warning(self, "Hata", TRANSLATIONS["error_select_row"])
             return
+
         headers = self.get_column_headers()
-        cursor = self.conn.cursor()
-        row_id = self.table.item(selected, 0).data(Qt.UserRole)
-        dialog = EditDialog(self, [self.table.item(selected, 0)], headers)  # row_id için sadece ilk sütunu gönderiyoruz
+        row_data = [self.table.item(selected, i) for i in range(self.table.columnCount() - 1)]
+        dialog = EditDialog(self, row_data, headers)
         if dialog.exec_():
-            updated_data = dialog.get_data()
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-            group_name_idx = headers.index(TRANSLATIONS["group_name"]) if TRANSLATIONS["group_name"] in headers else -1
-            region_idx = headers.index(TRANSLATIONS["region"]) if TRANSLATIONS["region"] in headers else -1
-            floor_idx = headers.index(TRANSLATIONS["floor"]) if TRANSLATIONS["floor"] in headers else -1
-            code_idx = headers.index("Demirbaş Kodu") if "Demirbaş Kodu" in headers else -1
-
-            if group_name_idx != -1 and region_idx != -1 and floor_idx != -1:
-                group_name = updated_data[group_name_idx]
-                region_name = updated_data[region_idx]
-                floor_name = updated_data[floor_idx]
-                new_code = self.generate_inventory_code(group_name, region_name, floor_name)
-                if code_idx != -1:
-                    updated_data[code_idx] = new_code
-
+            new_data = dialog.get_data()
             cursor = self.conn.cursor()
-            cursor.execute("UPDATE inventory SET data = ?, timestamp = ? WHERE id = ?", (json.dumps(updated_data), timestamp, row_id))
-            self.conn.commit()
-            self.load_data_from_db()
-            QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_updated"])
+            row_id = self.table.item(selected, 0).data(Qt.UserRole)
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                cursor.execute("UPDATE inventory SET data = ?, timestamp = ? WHERE id = ?",
+                               (json.dumps(new_data), timestamp, row_id))
+                self.conn.commit()
+                QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_updated"])
+                logging.info(f"Envanter güncellendi: ID {row_id}")
+                self.load_data_from_db()
+            except sqlite3.Error as e:
+                logging.error(f"Envanter güncellenirken hata: {str(e)}")
+                QMessageBox.critical(self, "Hata", f"Envanter güncellenemedi: {str(e)}")
 
     def archive_item_with_confirmation(self):
         selected = self.table.currentRow()
-        if selected >= 0:
-            if QMessageBox.question(self, "Onay", TRANSLATIONS["confirm_archive"],
-                                    QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
-                row_id = self.table.item(selected, 0).data(Qt.UserRole)
-                cursor = self.conn.cursor()
-                cursor.execute("SELECT data, timestamp FROM inventory WHERE id = ?", (row_id,))
-                data, timestamp = cursor.fetchone()
+        if selected < 0:
+            QMessageBox.warning(self, "Hata", TRANSLATIONS["error_select_row"])
+            return
+
+        if QMessageBox.question(self, "Onay", TRANSLATIONS["confirm_archive"],
+                                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            cursor = self.conn.cursor()
+            row_id = self.table.item(selected, 0).data(Qt.UserRole)
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                cursor.execute("SELECT data FROM inventory WHERE id = ?", (row_id,))
+                data = cursor.fetchone()[0]
                 cursor.execute("INSERT INTO archive (data, timestamp) VALUES (?, ?)", (data, timestamp))
                 cursor.execute("DELETE FROM inventory WHERE id = ?", (row_id,))
                 self.conn.commit()
+                QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_archived"])
+                logging.info(f"Envanter arşive taşındı: ID {row_id}")
                 self.load_data_from_db()
                 self.load_archive_from_db()
-                QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_archived"])
-        else:
-            QMessageBox.warning(self, "Hata", TRANSLATIONS["error_select_row"])
+            except sqlite3.Error as e:
+                logging.error(f"Envanter arşive taşınırken hata: {str(e)}")
+                QMessageBox.critical(self, "Hata", f"Envanter arşive taşınamadı: {str(e)}")
 
     def delete_item_with_double_confirmation(self):
         selected = self.table.currentRow()
-        if selected >= 0:
-            if QMessageBox.question(self, "Onay", TRANSLATIONS["confirm_delete"],
+        if selected < 0:
+            QMessageBox.warning(self, "Hata", TRANSLATIONS["error_select_row"])
+            return
+
+        if QMessageBox.question(self, "Onay", TRANSLATIONS["confirm_delete"],
+                                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            if QMessageBox.question(self, "Son Onay", TRANSLATIONS["confirm_delete_final"],
                                     QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
-                if QMessageBox.question(self, "Son Onay", TRANSLATIONS["confirm_delete_final"],
-                                        QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
-                    row_id = self.table.item(selected, 0).data(Qt.UserRole)
-                    cursor = self.conn.cursor()
+                cursor = self.conn.cursor()
+                row_id = self.table.item(selected, 0).data(Qt.UserRole)
+                try:
                     cursor.execute("DELETE FROM inventory WHERE id = ?", (row_id,))
                     self.conn.commit()
-                    self.load_data_from_db()
                     QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_deleted"])
-        else:
-            QMessageBox.warning(self, "Hata", TRANSLATIONS["error_select_row"])
-
-    def delete_archive_item_with_confirmation(self):
-        selected = self.archive_table.currentRow()
-        if selected >= 0:
-            if QMessageBox.question(self, "Onay", TRANSLATIONS["confirm_delete"],
-                                    QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
-                row_id = self.archive_table.item(selected, 0).data(Qt.UserRole)
-                cursor = self.conn.cursor()
-                cursor.execute("DELETE FROM archive WHERE id = ?", (row_id,))
-                self.conn.commit()
-                self.load_archive_from_db()
-                QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_deleted"])
-        else:
-            QMessageBox.warning(self, "Hata", TRANSLATIONS["error_select_row"])
+                    logging.info(f"Envanter silindi: ID {row_id}")
+                    self.load_data_from_db()
+                except sqlite3.Error as e:
+                    logging.error(f"Envanter silinirken hata: {str(e)}")
+                    QMessageBox.critical(self, "Hata", f"Envanter silinemedi: {str(e)}")
 
     def duplicate_item(self):
         selected = self.table.currentRow()
@@ -1540,43 +1617,27 @@ class InventoryApp(QMainWindow):
             QMessageBox.warning(self, "Hata", TRANSLATIONS["error_select_row"])
             return
 
-        headers = self.get_column_headers()  # Dinamik headers alımı
         cursor = self.conn.cursor()
         row_id = self.table.item(selected, 0).data(Qt.UserRole)
-        cursor.execute("SELECT data FROM inventory WHERE id = ?", (row_id,))
-        full_data = json.loads(cursor.fetchone()[0])
-
-        # full_data'nın headers ile uyumlu olduğundan emin olalım
-        if len(full_data) < len(headers):
-            full_data.extend([""] * (len(headers) - len(full_data)))
-        elif len(full_data) > len(headers):
-            full_data = full_data[:len(headers)]
-
-        logging.info(f"duplicate_item: headers={headers}")
-        logging.info(f"duplicate_item: original full_data={full_data}")
-
-        # Yeni demirbaş kodu oluştur
-        group_name_idx = headers.index(TRANSLATIONS["group_name"]) if TRANSLATIONS["group_name"] in headers else -1
-        region_idx = headers.index(TRANSLATIONS["region"]) if TRANSLATIONS["region"] in headers else -1
-        floor_idx = headers.index(TRANSLATIONS["floor"]) if TRANSLATIONS["floor"] in headers else -1
-        code_idx = headers.index("Demirbaş Kodu") if "Demirbaş Kodu" in headers else -1
-
-        if group_name_idx != -1 and region_idx != -1 and floor_idx != -1:
-            group_name = full_data[group_name_idx]
-            region_name = full_data[region_idx]
-            floor_name = full_data[floor_idx]
-            new_code = self.generate_inventory_code(group_name, region_name, floor_name)
+        try:
+            cursor.execute("SELECT data FROM inventory WHERE id = ?", (row_id,))
+            data = json.loads(cursor.fetchone()[0])
+            headers = self.get_column_headers()
+            code_idx = headers.index("Demirbaş Kodu") if "Demirbaş Kodu" in headers else -1
             if code_idx != -1:
-                full_data[code_idx] = new_code
-
-        # Yeni timestamp ile kopyayı ekle
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("INSERT INTO inventory (data, timestamp) VALUES (?, ?)", (json.dumps(full_data), timestamp))
-        self.conn.commit()
-        self.load_data_from_db()
-
-        logging.info(f"duplicate_item: duplicated data={full_data}")
-        QMessageBox.information(self, "Başarılı", f"Öğe çoğaltıldı! Yeni Demirbaş Kodu: {new_code}")
+                group_idx = headers.index(TRANSLATIONS["group_name"])
+                region_idx = headers.index(TRANSLATIONS["region"])
+                floor_idx = headers.index(TRANSLATIONS["floor"])
+                data[code_idx] = self.generate_inventory_code(data[group_idx], data[region_idx], data[floor_idx])
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute("INSERT INTO inventory (data, timestamp) VALUES (?, ?)", (json.dumps(data), timestamp))
+            self.conn.commit()
+            QMessageBox.information(self, "Başarılı", "Envanter çoğaltıldı!")
+            logging.info(f"Envanter çoğaltıldı: ID {row_id}")
+            self.load_data_from_db()
+        except sqlite3.Error as e:
+            logging.error(f"Envanter çoğaltılırken hata: {str(e)}")
+            QMessageBox.critical(self, "Hata", f"Envanter çoğaltılamadı: {str(e)}")
 
     def show_details(self):
         selected = self.table.currentRow()
@@ -1604,17 +1665,30 @@ class InventoryApp(QMainWindow):
             # Demirbaş Fotoğrafını en üste ekle
             photo_idx = headers.index(TRANSLATIONS["photo"]) if TRANSLATIONS["photo"] in headers else -1
             if photo_idx != -1 and data[photo_idx]:
+                photo_path = os.path.abspath(os.path.join(BASE_DIR, data[photo_idx]))  # Mutlak yol
                 photo_label = QLabel("Demirbaş Fotoğrafı:")
                 photo_label.setStyleSheet("font-weight: bold; font-size: 14px;")
                 photo_widget = QLabel()
-                pixmap = QPixmap(data[photo_idx])
-                if not pixmap.isNull():
-                    pixmap = pixmap.scaled(200, 200, Qt.KeepAspectRatio)
-                    photo_widget.setPixmap(pixmap)
+
+                if os.path.exists(photo_path):
+                    pixmap = QPixmap(photo_path)
+                    if not pixmap.isNull():
+                        pixmap = pixmap.scaled(200, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                        photo_widget.setPixmap(pixmap)
+                    else:
+                        photo_widget.setText(f"Fotoğraf yüklenemedi: {photo_path}")
+                        logging.warning(f"Fotoğraf yüklenemedi (QPixmap hatası): {photo_path}")
                 else:
-                    photo_widget.setText("Fotoğraf yüklenemedi")
+                    photo_widget.setText(f"Dosya bulunamadı: {photo_path}")
+                    logging.warning(f"Fotoğraf dosyası bulunamadı: {photo_path}")
+
                 layout.addWidget(photo_label)
                 layout.addWidget(photo_widget)
+                layout.addSpacing(10)
+            else:
+                photo_label = QLabel("Demirbaş Fotoğrafı: Yok")
+                photo_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+                layout.addWidget(photo_label)
                 layout.addSpacing(10)
 
             # Diğer alanları tablarda göster
@@ -1712,7 +1786,6 @@ class InventoryApp(QMainWindow):
                 elements = []
                 styles = getSampleStyleSheet()
 
-                # Kurum başlığını şekillendir (generate_pdf_report ile aynı stil)
                 title_style = ParagraphStyle(
                     'TitleStyle',
                     parent=styles['Heading1'],
@@ -1728,7 +1801,6 @@ class InventoryApp(QMainWindow):
                 title = Paragraph(TRANSLATIONS["title"], title_style)
                 elements.append(title)
 
-                # Kurum adresleri ve oluşturulma tarihi (generate_pdf_report ile aynı stil)
                 address_style = ParagraphStyle(
                     'AddressStyle',
                     parent=styles['Normal'],
@@ -1759,36 +1831,21 @@ class InventoryApp(QMainWindow):
                 date = Paragraph(date_text, date_style)
                 elements.append(date)
 
-                # Logo ekle (varsa)
                 if os.path.exists(LOGO_FILE):
                     logo = Image(LOGO_FILE, width=2 * cm, height=2 * cm)
                     logo.hAlign = 'CENTER'
                     elements.append(logo)
                     elements.append(Spacer(1, 0.5 * cm))
 
-                # Detay başlığı (generate_pdf_report ile uyumlu başlık)
-                detail_title_style = ParagraphStyle(
-                    'DetailTitleStyle',
-                    parent=styles['Heading2'],
-                    fontName=self.default_font,
-                    fontSize=12,
-                    textColor=colors.black,
-                    alignment=1,
-                    spaceAfter=10
-                )
-
-
-                # Tablo verilerini hazırla (generate_pdf_report ile aynı stil)
                 table_data = [["Alan", "Değer"]]
                 for header, value in zip(headers, data):
-                    if header != TRANSLATIONS["photo"]:  # Fotoğrafı tabloya eklemiyoruz, zaten üstte gösterdik
+                    if header != TRANSLATIONS["photo"]:
                         table_data.append([header, value or "Bilgi Yok"])
 
-                # Tablo stilini tanımla (generate_pdf_report ile aynı)
                 table_style = TableStyle([
                     ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),  # Fotoğraf olmadığı için sola hizalama
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
                     ('FONTNAME', (0, 0), (-1, -1), self.default_font),
                     ('FONTSIZE', (0, 0), (-1, 0), 10),
                     ('FONTSIZE', (0, 1), (-1, -1), 9),
@@ -1802,16 +1859,13 @@ class InventoryApp(QMainWindow):
                     ('WORDWRAP', (0, 0), (-1, -1), True),
                 ])
 
-                # Tablo sütun genişliklerini dinamik ayarla
-                page_width = A4[0] - 2 * cm  # Sayfanın kullanılabilir genişliği
-                col_widths = [page_width * 0.3, page_width * 0.7]  # Alan ve Değer sütunları için oranlar
+                page_width = A4[0] - 2 * cm
+                col_widths = [page_width * 0.3, page_width * 0.7]
 
-                # Tabloyu oluştur
                 table = Table(table_data, colWidths=col_widths)
                 table.setStyle(table_style)
                 elements.append(table)
 
-                # PDF'i oluştur
                 doc.build(elements)
                 QMessageBox.information(self, "Başarılı", "Detaylar PDF olarak kaydedildi!")
                 logging.info(f"Detaylar PDF olarak {file_name} dosyasına kaydedildi.")
@@ -1821,150 +1875,119 @@ class InventoryApp(QMainWindow):
 
     def view_archive_item(self):
         selected = self.archive_table.currentRow()
-        if selected >= 0:
-            headers = self.get_column_headers()
-            cursor = self.conn.cursor()
-            row_id = self.archive_table.item(selected, 0).data(Qt.UserRole)
-            cursor.execute("SELECT data FROM archive WHERE id = ?", (row_id,))
-            full_data = json.loads(cursor.fetchone()[0])
-            data = full_data if len(full_data) == len(headers) else full_data + [""] * (len(headers) - len(full_data))
-
-            dialog = QDialog(self)
-            dialog.setWindowTitle(TRANSLATIONS["details_title"])
-            layout = QVBoxLayout(dialog)
-            detail_table = QTableWidget(len(headers), 2)
-            detail_table.setHorizontalHeaderLabels(["Alan", "Değer"])
-            detail_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-            for row, (header, value) in enumerate(zip(headers, data)):
-                detail_table.setItem(row, 0, QTableWidgetItem(header))
-                if header == TRANSLATIONS["photo"] and value:
-                    pixmap = QPixmap(value)
-                    label = QLabel()
-                    if not pixmap.isNull():
-                        pixmap = pixmap.scaled(100, 100, Qt.KeepAspectRatio)
-                        label.setPixmap(pixmap)
-                    else:
-                        label.setText("Fotoğraf yüklenemedi")
-                    detail_table.setCellWidget(row, 1, label)
-                else:
-                    detail_table.setItem(row, 1, QTableWidgetItem(value if value else "Bilgi Yok"))
-            layout.addWidget(detail_table)
-            close_button = QPushButton(TRANSLATIONS["close_item"])
-            close_button.clicked.connect(dialog.accept)
-            layout.addWidget(close_button)
-            dialog.exec_()
-        else:
-            QMessageBox.warning(self, "Hata", TRANSLATIONS["error_select_row"])
-
-    def restore_archive_item(self):
-        selected = self.archive_table.currentRow()  # archive_table'dan seçim yapıldığı için düzeltildi
         if selected < 0:
             QMessageBox.warning(self, "Hata", TRANSLATIONS["error_select_row"])
             return
 
         headers = self.get_column_headers()
         cursor = self.conn.cursor()
-        row_id = self.archive_table.item(selected, 0).data(Qt.UserRole)  # Arşiv tablosundan row_id al
+        row_id = self.archive_table.item(selected, 0).data(Qt.UserRole)
         cursor.execute("SELECT data FROM archive WHERE id = ?", (row_id,))
-        full_data = json.loads(cursor.fetchone()[0])
-        
-        # full_data'nın headers ile uyumlu olduğundan emin olalım
-        if len(full_data) < len(headers):
-            full_data.extend([""] * (len(headers) - len(full_data)))
-        elif len(full_data) > len(headers):
-            full_data = full_data[:len(headers)]
+        data = json.loads(cursor.fetchone()[0])
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Arşiv Detayları")
+        layout = QVBoxLayout(dialog)
+        for i, header in enumerate(headers):
+            label = QLabel(f"{header}: {data[i] if i < len(data) else ''}")
+            layout.addWidget(label)
+        close_button = QPushButton(TRANSLATIONS["close_item"])
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button)
+        dialog.exec_()
 
-        dialog = EditDialog(self, full_data, headers)  # row_data olarak full_data gönderiyoruz
-        if dialog.exec_():
-            updated_data = dialog.get_data()
+    def restore_archive_item(self):
+        selected = self.archive_table.currentRow()
+        if selected < 0:
+            QMessageBox.warning(self, "Hata", TRANSLATIONS["error_select_row"])
+            return
+
+        cursor = self.conn.cursor()
+        row_id = self.archive_table.item(selected, 0).data(Qt.UserRole)
+        try:
+            cursor.execute("SELECT data FROM archive WHERE id = ?", (row_id,))
+            data = cursor.fetchone()[0]
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute("INSERT INTO inventory (data, timestamp) VALUES (?, ?)", (json.dumps(updated_data), timestamp))
+            cursor.execute("INSERT INTO inventory (data, timestamp) VALUES (?, ?)", (data, timestamp))
             cursor.execute("DELETE FROM archive WHERE id = ?", (row_id,))
             self.conn.commit()
+            QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_restored"])
+            logging.info(f"Arşivden envanter geri yüklendi: ID {row_id}")
             self.load_data_from_db()
             self.load_archive_from_db()
-            QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_restored"])
+        except sqlite3.Error as e:
+            logging.error(f"Arşivden envanter geri yüklenirken hata: {str(e)}")
+            QMessageBox.critical(self, "Hata", f"Envanter geri yüklenemedi: {str(e)}")
+
+    def delete_archive_item_with_confirmation(self):
+        selected = self.archive_table.currentRow()
+        if selected < 0:
+            QMessageBox.warning(self, "Hata", TRANSLATIONS["error_select_row"])
+            return
+
+        if QMessageBox.question(self, "Onay", TRANSLATIONS["confirm_delete"],
+                                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            cursor = self.conn.cursor()
+            row_id = self.archive_table.item(selected, 0).data(Qt.UserRole)
+            try:
+                cursor.execute("DELETE FROM archive WHERE id = ?", (row_id,))
+                self.conn.commit()
+                QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_deleted"])
+                logging.info(f"Arşivden envanter silindi: ID {row_id}")
+                self.load_archive_from_db()
+            except sqlite3.Error as e:
+                logging.error(f"Arşivden envanter silinirken hata: {str(e)}")
+                QMessageBox.critical(self, "Hata", f"Envanter silinemedi: {str(e)}")
 
     def export_to_file(self):
         headers = self.get_column_headers()
         visible_headers = [h for h in headers if h != TRANSLATIONS["photo"]]
-        data = []
-        for row in range(self.table.rowCount()):
-            row_data = [self.table.item(row, col).text() if self.table.item(row, col) else "" for col in range(len(visible_headers))]
-            data.append(row_data)
-
-        if not data:
-            QMessageBox.warning(self, "Hata", "Dışa aktarılacak veri yok!")
-            return
-
         file_format = self.config["export_format"]
-        file_name, _ = QFileDialog.getSaveFileName(self, "Dosyayı Kaydet", "", file_format)
+        file_name, _ = QFileDialog.getSaveFileName(self, "Dosyaya Aktar", "",
+                                                   f"{file_format};;Excel (*.xlsx);;CSV (*.csv);;JSON (*.json)")
         if file_name:
             try:
-                df = pd.DataFrame(data, columns=visible_headers)
-                if file_format == "Excel (*.xlsx)":
+                cursor = self.conn.cursor()
+                cursor.execute("SELECT data FROM inventory")
+                rows = [json.loads(row[0]) for row in cursor.fetchall()]
+                df = pd.DataFrame(rows, columns=headers)
+                df = df[visible_headers]  # Fotoğraf sütununu hariç tut
+                if file_name.endswith('.xlsx'):
                     df.to_excel(file_name, index=False)
-                elif file_format == "CSV (*.csv)":
-                    df.to_csv(file_name, index=False)
-                elif file_format == "JSON (*.json)":
-                    df.to_json(file_name, orient="records", force_ascii=False)
+                elif file_name.endswith('.csv'):
+                    df.to_csv(file_name, index=False, encoding='utf-8-sig')
+                elif file_name.endswith('.json'):
+                    df.to_json(file_name, orient='records', force_ascii=False)
                 QMessageBox.information(self, "Başarılı", TRANSLATIONS["excel_exported"])
-                logging.info(f"Veriler {file_name} dosyasına {file_format} formatında aktarıldı.")
+                logging.info(f"Veriler {file_name} dosyasına aktarıldı.")
             except Exception as e:
-                QMessageBox.critical(self, "Hata", f"Dışa aktarma başarısız: {str(e)}")
-                logging.error(f"Dışa aktarma hatası: {str(e)}")
+                logging.error(f"Dosyaya aktarma hatası: {str(e)}")
+                QMessageBox.critical(self, "Hata", f"Dosyaya aktarma başarısız: {str(e)}")
 
     def import_from_file(self):
-        file_name, _ = QFileDialog.getOpenFileName(self, "Dosya Seç", "", "Excel (*.xlsx);;CSV (*.csv);;JSON (*.json)")
+        file_name, _ = QFileDialog.getOpenFileName(self, "Dosyadan İçe Aktar", "",
+                                                   "Excel (*.xlsx);;CSV (*.csv);;JSON (*.json)")
         if file_name:
             try:
-                if file_name.endswith(".xlsx"):
+                if file_name.endswith('.xlsx'):
                     df = pd.read_excel(file_name)
-                elif file_name.endswith(".csv"):
-                    df = pd.read_csv(file_name)
-                elif file_name.endswith(".json"):
-                    df = pd.read_json(file_name)
-                else:
-                    QMessageBox.warning(self, "Hata", "Desteklenmeyen dosya formatı!")
-                    return
-
+                elif file_name.endswith('.csv'):
+                    df = pd.read_csv(file_name, encoding='utf-8-sig')
+                elif file_name.endswith('.json'):
+                    df = pd.read_json(file_name, orient='records')
                 headers = self.get_column_headers()
                 cursor = self.conn.cursor()
-
-                choice = QMessageBox.question(self, "Veri İçe Aktarma",
-                                              "Mevcut verilerin üzerine yazmak mı istiyorsunuz? (Hayır seçilirse ekleme yapılır)",
-                                              QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
-                if choice == QMessageBox.Cancel:
-                    return
-                elif choice == QMessageBox.Yes:
-                    cursor.execute("DELETE FROM inventory")
-                    self.conn.commit()
-
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 for _, row in df.iterrows():
                     data = [str(row.get(header, "")) for header in headers]
-                    if len(data) < len(headers):
-                        data.extend([""] * (len(headers) - len(data)))
-                    group_name_idx = headers.index(TRANSLATIONS["group_name"]) if TRANSLATIONS["group_name"] in headers else -1
-                    region_idx = headers.index(TRANSLATIONS["region"]) if TRANSLATIONS["region"] in headers else -1
-                    floor_idx = headers.index(TRANSLATIONS["floor"]) if TRANSLATIONS["floor"] in headers else -1
-                    code_idx = headers.index("Demirbaş Kodu") if "Demirbaş Kodu" in headers else -1
-
-                    if group_name_idx != -1 and region_idx != -1 and floor_idx != -1:
-                        group_name = data[group_name_idx]
-                        region_name = data[region_idx]
-                        floor_name = data[floor_idx]
-                        if code_idx != -1 and not data[code_idx]:
-                            data[code_idx] = self.generate_inventory_code(group_name, region_name, floor_name)
-
-                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    cursor.execute("INSERT INTO inventory (data, timestamp) VALUES (?, ?)", (json.dumps(data), timestamp))
+                    cursor.execute("INSERT INTO inventory (data, timestamp) VALUES (?, ?)",
+                                   (json.dumps(data), timestamp))
                 self.conn.commit()
-                self.load_data_from_db()
                 QMessageBox.information(self, "Başarılı", TRANSLATIONS["excel_imported"])
                 logging.info(f"Veriler {file_name} dosyasından içe aktarıldı.")
+                self.load_data_from_db()
             except Exception as e:
-                QMessageBox.critical(self, "Hata", f"İçe aktarma başarısız: {str(e)}")
-                logging.error(f"İçe aktarma hatası: {str(e)}")
+                logging.error(f"Dosyadan içe aktarma hatası: {str(e)}")
+                QMessageBox.critical(self, "Hata", f"Dosyadan içe aktarma başarısız: {str(e)}")
 
     def generate_pdf_report(self):
         headers = self.get_column_headers()
@@ -2037,7 +2060,7 @@ class InventoryApp(QMainWindow):
                         elements.append(logo)
                         elements.append(Spacer(1, 0.5 * cm))
 
-                    # Tüm veriyi tablo için hazırla, "No" yerine "Fotoğraf" sütunu
+                    # Tüm veriyi tablo için hazırla
                     table_data = [["Fotoğraf"] + selected_headers]  # Başlık satırı
                     photo_idx = headers.index(TRANSLATIONS["photo"]) if TRANSLATIONS["photo"] in headers else -1
                     
@@ -2052,9 +2075,18 @@ class InventoryApp(QMainWindow):
 
                         row_data = []
                         # Fotoğraf sütunu
-                        if photo_idx != -1 and data[photo_idx] and os.path.exists(data[photo_idx]):
-                            photo = Image(data[photo_idx], width=1 * cm, height=1 * cm)  # Küçük fotoğraf
-                            row_data.append(photo)
+                        if photo_idx != -1 and data[photo_idx]:
+                            photo_path = os.path.abspath(os.path.join(BASE_DIR, data[photo_idx]))  # Mutlak yol
+                            if os.path.exists(photo_path):
+                                try:
+                                    photo = Image(photo_path, width=1.5 * cm, height=1.5 * cm)  # Boyut artırıldı
+                                    row_data.append(photo)
+                                except Exception as e:
+                                    row_data.append("Fotoğraf Yüklenemedi")
+                                    logging.error(f"PDF'de fotoğraf yüklenemedi: {photo_path}, Hata: {str(e)}")
+                            else:
+                                row_data.append("Fotoğraf Bulunamadı")
+                                logging.warning(f"PDF'de fotoğraf dosyası bulunamadı: {photo_path}")
                         else:
                             row_data.append("Foto Yok")
 
@@ -2087,23 +2119,21 @@ class InventoryApp(QMainWindow):
                     num_cols = len(selected_headers) + 1  # "Fotoğraf" sütunu dahil
                     base_col_width = page_width / num_cols
 
-                    # Her sütunun maksimum içerik uzunluğunu hesapla
-                    col_max_lengths = [len(str(table_data[0][i])) for i in range(num_cols)]  # Başlık uzunlukları
+                    col_max_lengths = [len(str(table_data[0][i])) for i in range(num_cols)]
                     for row in table_data[1:]:
                         for i, cell in enumerate(row):
                             if i == 0 and isinstance(cell, Image):
-                                col_max_lengths[i] = max(col_max_lengths[i], 10)  # Fotoğraf için sabit bir değer
+                                col_max_lengths[i] = max(col_max_lengths[i], 15)  # Fotoğraf için sabit bir değer
                             else:
                                 col_max_lengths[i] = max(col_max_lengths[i], len(str(cell)))
 
-                    # Toplam uzunluğa göre sütun genişliklerini oranla
                     total_length = sum(col_max_lengths)
                     col_widths = []
                     for i, length in enumerate(col_max_lengths):
                         if total_length > 0:
                             width = (length / total_length) * page_width
                             if i == 0:  # Fotoğraf sütunu için sabit genişlik
-                                col_widths.append(1.2 * cm)  # Fotoğraflar için biraz daha geniş
+                                col_widths.append(2 * cm)  # Fotoğraflar için daha geniş alan
                             else:
                                 col_widths.append(max(width, base_col_width * 0.5))  # Minimum genişlik sınırı
                         else:
@@ -2123,458 +2153,310 @@ class InventoryApp(QMainWindow):
                 except Exception as e:
                     QMessageBox.critical(self, "Hata", f"PDF oluşturma başarısız: {str(e)}")
                     logging.error(f"PDF rapor oluşturma hatası: {str(e)}")
-                    
-    def quick_search(self):
-        search_text = self.search_bar.text().lower()
+
+    def quick_search(self, text):
         for row in range(self.table.rowCount()):
-            row_hidden = True
+            match = False
             for col in range(self.table.columnCount()):
                 item = self.table.item(row, col)
-                if item and search_text in item.text().lower():
-                    row_hidden = False
+                if item and text.lower() in item.text().lower():
+                    match = True
                     break
-            self.table.setRowHidden(row, row_hidden)
+            self.table.setRowHidden(row, not match)
 
-    def filter_data(self):
-        filter_group = self.filter_combo.currentText()
-        group_idx = self.get_column_headers().index(TRANSLATIONS["group_name"])
-        for row in range(self.table.rowCount()):
-            group_item = self.table.item(row, group_idx)
-            group = group_item.text() if group_item else ""
-            self.table.setRowHidden(row, filter_group != "Tümü" and group != filter_group)
+    def filter_data(self, group):
+        if group == "Tümü":
+            for row in range(self.table.rowCount()):
+                self.table.setRowHidden(row, False)
+        else:
+            group_idx = self.get_column_headers().index(TRANSLATIONS["group_name"])
+            for row in range(self.table.rowCount()):
+                item = self.table.item(row, group_idx)
+                self.table.setRowHidden(row, item.text() != group if item else True)
+
+    def auto_backup(self):
+        backup_path = self.config["backup_path"]
+        os.makedirs(backup_path, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_file = os.path.join(backup_path, f"inventory_backup_{timestamp}.db")
+        try:
+            shutil.copy2(DB_FILE, backup_file)
+            logging.info(f"Veritabanı yedeklendi: {backup_file}")
+            self.clean_old_backups()
+        except IOError as e:
+            logging.error(f"Yedekleme hatası: {str(e)}")
+
+    def clean_old_backups(self):
+        backup_path = self.config["backup_path"]
+        retention_days = self.config["backup_retention"]
+        cutoff_time = time.time() - retention_days * 86400
+        for backup_file in glob.glob(os.path.join(backup_path, "inventory_backup_*.db")):
+            if os.path.getctime(backup_file) < cutoff_time:
+                try:
+                    os.remove(backup_file)
+                    logging.info(f"Eski yedek silindi: {backup_file}")
+                except OSError as e:
+                    logging.error(f"Eski yedek silinirken hata: {str(e)}")
+
+    def save_current_form(self):
+        # Otomatik kaydetme için bir şeyler yapılabilir, şu an boş bırakıldı
+        pass
+
+    def close_application(self):
+        if QMessageBox.question(self, "Çıkış", "Uygulamadan çıkmak istediğinizden emin misiniz?",
+                                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            self.conn.close()
+            QApplication.quit()
 
     def manage_parameters(self):
         dialog = QDialog(self)
         dialog.setWindowTitle(TRANSLATIONS["param_management"])
         layout = QVBoxLayout(dialog)
-
-        self.param_list = QListWidget()
+        list_widget = QListWidget()
         cursor = self.conn.cursor()
         cursor.execute("SELECT column_name FROM metadata ORDER BY column_order")
         for row in cursor.fetchall():
-            self.param_list.addItem(row[0])
-        layout.addWidget(self.param_list)
+            list_widget.addItem(row[0])
+        layout.addWidget(list_widget)
 
         button_layout = QHBoxLayout()
         add_button = QPushButton(TRANSLATIONS["add_parameter"])
-        add_button.clicked.connect(self.add_parameter)
+        add_button.clicked.connect(lambda: self.add_parameter(list_widget))
         button_layout.addWidget(add_button)
 
         edit_button = QPushButton(TRANSLATIONS["edit_parameter"])
-        edit_button.clicked.connect(self.edit_parameter)
+        edit_button.clicked.connect(lambda: self.edit_parameter(list_widget))
         button_layout.addWidget(edit_button)
 
         delete_button = QPushButton(TRANSLATIONS["delete_parameter"])
-        delete_button.clicked.connect(self.delete_parameter)
+        delete_button.clicked.connect(lambda: self.delete_parameter(list_widget))
         button_layout.addWidget(delete_button)
 
         layout.addLayout(button_layout)
+        close_button = QPushButton(TRANSLATIONS["close_item"])
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button)
         dialog.exec_()
 
-    def add_parameter(self):
+    def add_parameter(self, list_widget):
         dialog = AddParameterDialog(self)
         if dialog.exec_():
             name, section, param_type, combobox_file = dialog.get_data()
-            if name and name not in self.get_column_headers():
-                cursor = self.conn.cursor()
+            if not name:
+                QMessageBox.warning(self, "Hata", "Parametre adı boş olamaz!")
+                return
+            cursor = self.conn.cursor()
+            try:
                 cursor.execute("SELECT MAX(column_order) FROM metadata")
                 max_order = cursor.fetchone()[0] or 0
                 cursor.execute("INSERT INTO metadata (column_name, column_order, section, type, combobox_file) VALUES (?, ?, ?, ?, ?)",
                                (name, max_order + 1, section, param_type, combobox_file))
                 self.conn.commit()
-                self.param_list.addItem(name)
+                list_widget.addItem(name)
                 self.setup_inventory_tab()
-                self.update_comboboxes()
-                QMessageBox.information(self, "Başarılı", f"'{name}' parametresi eklendi!")
+                logging.info(f"Yeni parametre eklendi: {name}")
+            except sqlite3.Error as e:
+                logging.error(f"Parametre eklenirken hata: {str(e)}")
+                QMessageBox.critical(self, "Hata", f"Parametre eklenemedi: {str(e)}")
 
-    def edit_parameter(self):
-        selected = self.param_list.currentItem()
-        if selected:
-            old_name = selected.text()
-            dialog = EditParameterDialog(self, old_name)
-            if dialog.exec_():
-                new_name, section, param_type, combobox_file = dialog.get_data()
-                if new_name:
-                    cursor = self.conn.cursor()
-                    cursor.execute("UPDATE metadata SET column_name = ?, section = ?, type = ?, combobox_file = ? WHERE column_name = ?",
-                                   (new_name, section, param_type, combobox_file, old_name))
-                    self.conn.commit()
-                    selected.setText(new_name)
-                    self.setup_inventory_tab()  # Tabloyu sıfırdan oluştur
-                    self.load_data_from_db()   # Verileri yeni sırayla yükle
-                    self.update_comboboxes()
-                    QMessageBox.information(self, "Başarılı", f"'{old_name}' parametresi '{new_name}' olarak güncellendi!")
-        else:
+    def edit_parameter(self, list_widget):
+        current_item = list_widget.currentItem()
+        if not current_item:
             QMessageBox.warning(self, "Hata", "Lütfen bir parametre seçin!")
+            return
+        current_name = current_item.text()
+        dialog = EditParameterDialog(self, current_name)
+        if dialog.exec_():
+            new_name, section, param_type, combobox_file = dialog.get_data()
+            if not new_name:
+                QMessageBox.warning(self, "Hata", "Parametre adı boş olamaz!")
+                return
+            cursor = self.conn.cursor()
+            try:
+                cursor.execute("UPDATE metadata SET column_name = ?, section = ?, type = ?, combobox_file = ? WHERE column_name = ?",
+                               (new_name, section, param_type, combobox_file, current_name))
+                self.conn.commit()
+                current_item.setText(new_name)
+                self.setup_inventory_tab()
+                logging.info(f"Parametre güncellendi: {current_name} -> {new_name}")
+            except sqlite3.Error as e:
+                logging.error(f"Parametre güncellenirken hata: {str(e)}")
+                QMessageBox.critical(self, "Hata", f"Parametre güncellenemedi: {str(e)}")
 
-    def delete_parameter(self):
-        selected = self.param_list.currentItem()
-        if selected:
-            name = selected.text()
-            if QMessageBox.question(self, "Onay", f"'{name}' parametresini silmek istediğinizden emin misiniz?",
-                                    QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
-                cursor = self.conn.cursor()
+    def delete_parameter(self, list_widget):
+        current_item = list_widget.currentItem()
+        if not current_item:
+            QMessageBox.warning(self, "Hata", "Lütfen bir parametre seçin!")
+            return
+        name = current_item.text()
+        if QMessageBox.question(self, "Onay", f"'{name}' parametresini silmek istediğinizden emin misiniz?",
+                                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            cursor = self.conn.cursor()
+            try:
                 cursor.execute("DELETE FROM metadata WHERE column_name = ?", (name,))
                 self.conn.commit()
-                self.param_list.takeItem(self.param_list.row(selected))
+                list_widget.takeItem(list_widget.row(current_item))
                 self.setup_inventory_tab()
-                QMessageBox.information(self, "Başarılı", f"'{name}' parametresi silindi!")
-        else:
-            QMessageBox.warning(self, "Hata", "Lütfen bir parametre seçin!")
+                logging.info(f"Parametre silindi: {name}")
+            except sqlite3.Error as e:
+                logging.error(f"Parametre silinirken hata: {str(e)}")
+                QMessageBox.critical(self, "Hata", f"Parametre silinemedi: {str(e)}")
 
     def manage_backups(self):
         dialog = QDialog(self)
         dialog.setWindowTitle(TRANSLATIONS["backup_operations"])
         layout = QVBoxLayout(dialog)
-
         backup_button = QPushButton(TRANSLATIONS["manual_backup"])
-        backup_button.clicked.connect(self.manual_backup)
+        backup_button.clicked.connect(self.auto_backup)
         layout.addWidget(backup_button)
-
+        close_button = QPushButton(TRANSLATIONS["close_item"])
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button)
         dialog.exec_()
-
-    def manual_backup(self):
-        self.auto_backup()
-        QMessageBox.information(self, "Başarılı", TRANSLATIONS["db_backed_up"])
-
-    def auto_backup(self):
-        backup_dir = self.config["backup_path"]
-        os.makedirs(backup_dir, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_file = os.path.join(backup_dir, f"inventory_backup_{timestamp}.db")
-        shutil.copy2(DB_FILE, backup_file)
-        logging.info(f"Veritabanı yedeklendi: {backup_file}")
-
-        now = time.time()
-        cutoff = now - (self.config["backup_retention"] * 86400)
-        for old_backup in glob.glob(os.path.join(backup_dir, "inventory_backup_*.db")):
-            if os.path.getctime(old_backup) < cutoff:
-                os.remove(old_backup)
-                logging.info(f"Eski yedek silindi: {old_backup}")
 
     def show_data_analysis(self):
         dialog = QDialog(self)
         dialog.setWindowTitle(TRANSLATIONS["analysis_title"])
-        dialog.setMinimumSize(800, 600)
         layout = QVBoxLayout(dialog)
 
+        headers = self.get_column_headers()
         cursor = self.conn.cursor()
         cursor.execute("SELECT data FROM inventory")
-        rows = cursor.fetchall()
-        total_records = len(rows)
-        layout.addWidget(QLabel(TRANSLATIONS["total_records"].format(total_records)))
+        rows = [json.loads(row[0]) for row in cursor.fetchall()]
+        df = pd.DataFrame(rows, columns=headers)
 
-        group_counts = {}
-        status_counts = {}
-        region_counts = {}
-        brand_counts = {}
-        warranty_status = {"Geçerli": 0, "Süresi Dolmuş": 0, "Bilinmeyen": 0}
-        headers = self.get_column_headers()
-        group_idx = headers.index(TRANSLATIONS["group_name"]) if TRANSLATIONS["group_name"] in headers else -1
-        status_idx = headers.index(TRANSLATIONS["status"]) if TRANSLATIONS["status"] in headers else -1
-        region_idx = headers.index(TRANSLATIONS["region"]) if TRANSLATIONS["region"] in headers else -1
-        brand_idx = headers.index(TRANSLATIONS["brand"]) if TRANSLATIONS["brand"] in headers else -1
-        warranty_idx = headers.index(TRANSLATIONS["warranty_period"]) if TRANSLATIONS["warranty_period"] in headers else -1
+        total_label = QLabel(TRANSLATIONS["total_records"].format(len(rows)))
+        layout.addWidget(total_label)
 
-        current_date = datetime.now()
-        for row in rows:
-            data = json.loads(row[0])
-            if group_idx != -1 and group_idx < len(data):
-                group = data[group_idx] or "Bilinmeyen"
-                group_counts[group] = group_counts.get(group, 0) + 1
-            if status_idx != -1 and status_idx < len(data):
-                status = data[status_idx] or "Bilinmeyen"
-                status_counts[status] = status_counts.get(status, 0) + 1
-            if region_idx != -1 and region_idx < len(data):
-                region = data[region_idx] or "Bilinmeyen"
-                region_counts[region] = region_counts.get(region, 0) + 1
-            if brand_idx != -1 and brand_idx < len(data):
-                brand = data[brand_idx] or "Bilinmeyen"
-                brand_counts[brand] = brand_counts.get(brand, 0) + 1
-            if warranty_idx != -1 and warranty_idx < len(data):
-                warranty = data[warranty_idx]
-                if warranty == TRANSLATIONS["unknown"]:
-                    warranty_status["Bilinmeyen"] += 1
-                else:
-                    try:
-                        warranty_date = datetime.strptime(warranty, "%d.%m.%Y")
-                        if warranty_date > current_date:
-                            warranty_status["Geçerli"] += 1
-                        else:
-                            warranty_status["Süresi Dolmuş"] += 1
-                    except ValueError:
-                        warranty_status["Bilinmeyen"] += 1
+        fig, axs = plt.subplots(2, 2, figsize=(10, 8))
+        group_dist = df[TRANSLATIONS["group_name"]].value_counts()
+        group_dist.plot(kind='pie', ax=axs[0, 0], autopct='%1.1f%%')
+        axs[0, 0].set_title(TRANSLATIONS["group_distribution"])
 
-        tabs = QTabWidget()
+        status_dist = df[TRANSLATIONS["status"]].value_counts()
+        status_dist.plot(kind='bar', ax=axs[0, 1])
+        axs[0, 1].set_title(TRANSLATIONS["status_distribution"])
 
-        # Grup Dağılımı
-        group_tab = QWidget()
-        group_layout = QVBoxLayout(group_tab)
-        group_layout.addWidget(QLabel(TRANSLATIONS["group_distribution"]))
-        fig1, ax1 = plt.subplots(figsize=(6, 4))
-        ax1.pie(group_counts.values(), labels=group_counts.keys(), autopct='%1.1f%%', startangle=90, textprops={'fontsize': 10})
-        ax1.axis('equal')
-        ax1.set_title(TRANSLATIONS["group_distribution"], fontsize=12)
-        canvas1 = FigureCanvas(fig1)
-        cursor1 = mplcursors.cursor(ax1, hover=True)
-        cursor1.connect("add", lambda sel: sel.annotation.set_text(f"{sel.target[0]:.1f}%"))
-        group_layout.addWidget(canvas1)
-        tabs.addTab(group_tab, TRANSLATIONS["group_distribution"])
+        region_dist = df[TRANSLATIONS["region"]].value_counts()
+        region_dist.plot(kind='bar', ax=axs[1, 0])
+        axs[1, 0].set_title(TRANSLATIONS["region_distribution"])
 
-        # Durum Dağılımı
-        status_tab = QWidget()
-        status_layout = QVBoxLayout(status_tab)
-        status_layout.addWidget(QLabel(TRANSLATIONS["status_distribution"]))
-        fig2, ax2 = plt.subplots(figsize=(6, 4))
-        bars = ax2.bar(status_counts.keys(), status_counts.values(), color='skyblue')
-        ax2.set_ylabel("Kayıt Sayısı", fontsize=10)
-        ax2.set_title(TRANSLATIONS["status_distribution"], fontsize=12)
-        plt.xticks(rotation=45, ha='right', fontsize=8)
-        canvas2 = FigureCanvas(fig2)
-        cursor2 = mplcursors.cursor(bars, hover=True)
-        cursor2.connect("add", lambda sel: sel.annotation.set_text(f"{int(sel.target[1])}"))
-        status_layout.addWidget(canvas2)
-        tabs.addTab(status_tab, TRANSLATIONS["status_distribution"])
+        brand_dist = df[TRANSLATIONS["brand"]].value_counts()
+        brand_dist.plot(kind='pie', ax=axs[1, 1], autopct='%1.1f%%')
+        axs[1, 1].set_title(TRANSLATIONS["brand_distribution"])
 
-        # Bölge Dağılımı
-        region_tab = QWidget()
-        region_layout = QVBoxLayout(region_tab)
-        region_layout.addWidget(QLabel(TRANSLATIONS["region_distribution"]))
-        fig3, ax3 = plt.subplots(figsize=(6, 4))
-        ax3.pie(region_counts.values(), labels=region_counts.keys(), autopct='%1.1f%%', startangle=90, textprops={'fontsize': 10})
-        ax3.axis('equal')
-        ax3.set_title(TRANSLATIONS["region_distribution"], fontsize=12)
-        canvas3 = FigureCanvas(fig3)
-        cursor3 = mplcursors.cursor(ax3, hover=True)
-        cursor3.connect("add", lambda sel: sel.annotation.set_text(f"{sel.target[0]:.1f}%"))
-        region_layout.addWidget(canvas3)
-        tabs.addTab(region_tab, TRANSLATIONS["region_distribution"])
-
-        # Marka Dağılımı
-        brand_tab = QWidget()
-        brand_layout = QVBoxLayout(brand_tab)
-        brand_layout.addWidget(QLabel(TRANSLATIONS["brand_distribution"]))
-        fig4, ax4 = plt.subplots(figsize=(6, 4))
-        ax4.pie(brand_counts.values(), labels=brand_counts.keys(), autopct='%1.1f%%', startangle=90, textprops={'fontsize': 10})
-        ax4.axis('equal')
-        ax4.set_title(TRANSLATIONS["brand_distribution"], fontsize=12)
-        canvas4 = FigureCanvas(fig4)
-        cursor4 = mplcursors.cursor(ax4, hover=True)
-        cursor4.connect("add", lambda sel: sel.annotation.set_text(f"{sel.target[0]:.1f}%"))
-        brand_layout.addWidget(canvas4)
-        tabs.addTab(brand_tab, TRANSLATIONS["brand_distribution"])
-
-        # Garanti Durumu
-        warranty_tab = QWidget()
-        warranty_layout = QVBoxLayout(warranty_tab)
-        warranty_layout.addWidget(QLabel(TRANSLATIONS["warranty_status"]))
-        fig5, ax5 = plt.subplots(figsize=(6, 4))
-        bars5 = ax5.bar(warranty_status.keys(), warranty_status.values(), color=['green', 'red', 'gray'])
-        ax5.set_ylabel("Kayıt Sayısı", fontsize=10)
-        ax5.set_title(TRANSLATIONS["warranty_status"], fontsize=12)
-        canvas5 = FigureCanvas(fig5)
-        cursor5 = mplcursors.cursor(bars5, hover=True)
-        cursor5.connect("add", lambda sel: sel.annotation.set_text(f"{int(sel.target[1])}"))
-        warranty_layout.addWidget(canvas5)
-        tabs.addTab(warranty_tab, TRANSLATIONS["warranty_status"])
-
-        layout.addWidget(tabs)
-
-        button_layout = QHBoxLayout()
-        export_charts_button = QPushButton(TRANSLATIONS["export_charts"])
-        export_charts_button.setIcon(qta.icon('fa5s.image', color='#FFC107'))
-        export_charts_button.clicked.connect(lambda: self.export_charts([fig1, fig2, fig3, fig4, fig5]))
-        button_layout.addWidget(export_charts_button)
-
-        export_data_button = QPushButton(TRANSLATIONS["export_analysis_data"])
-        export_data_button.setIcon(qta.icon('fa5s.file-excel', color='#FFC107'))
-        export_data_button.clicked.connect(lambda: self.export_analysis_data(group_counts, status_counts, region_counts, brand_counts, warranty_status))
-        button_layout.addWidget(export_data_button)
+        plt.tight_layout()
+        canvas = FigureCanvas(fig)
+        layout.addWidget(canvas)
 
         close_button = QPushButton(TRANSLATIONS["close_item"])
-        close_button.setIcon(qta.icon('fa5s.times', color='#D32F2F'))
         close_button.clicked.connect(dialog.accept)
-        button_layout.addWidget(close_button)
-
-        layout.addLayout(button_layout)
+        layout.addWidget(close_button)
         dialog.exec_()
 
-    def export_charts(self, figures):
-        folder = QFileDialog.getExistingDirectory(self, "Grafikleri Kaydet", "")
-        if folder:
-            try:
-                for i, fig in enumerate(figures, 1):
-                    file_name = os.path.join(folder, f"chart_{i}.png")
-                    fig.savefig(file_name, dpi=300, bbox_inches='tight')
-                    logging.info(f"Grafik {file_name} olarak kaydedildi.")
-                QMessageBox.information(self, "Başarılı", "Grafikler PNG olarak kaydedildi!")
-            except Exception as e:
-                QMessageBox.critical(self, "Hata", f"Grafik dışa aktarma başarısız: {str(e)}")
-                logging.error(f"Grafik dışa aktarma hatası: {str(e)}")
-
-    def export_analysis_data(self, group_counts, status_counts, region_counts, brand_counts, warranty_status):
-        file_name, _ = QFileDialog.getSaveFileName(self, "Analiz Verilerini Kaydet", "", "Excel (*.xlsx)")
-        if file_name:
-            try:
-                data = {
-                    TRANSLATIONS["group_distribution"]: pd.Series(group_counts),
-                    TRANSLATIONS["status_distribution"]: pd.Series(status_counts),
-                    TRANSLATIONS["region_distribution"]: pd.Series(region_counts),
-                    TRANSLATIONS["brand_distribution"]: pd.Series(brand_counts),
-                    TRANSLATIONS["warranty_status"]: pd.Series(warranty_status)
-                }
-                df = pd.DataFrame(data)
-                df.to_excel(file_name, index_label="Kategori")
-                QMessageBox.information(self, "Başarılı", "Analiz verileri Excel'e aktarıldı!")
-                logging.info(f"Analiz verileri {file_name} dosyasına aktarıldı.")
-            except Exception as e:
-                QMessageBox.critical(self, "Hata", f"Analiz verileri dışa aktarma başarısız: {str(e)}")
-                logging.error(f"Analiz verileri dışa aktarma hatası: {str(e)}")
-
     def manage_comboboxes(self):
-        menu = QMenu(self)
-        groups_action = menu.addAction(qta.icon('fa5s.list', color='#D32F2F'), "Demirbaş Cinslerini Düzenle")
-        regions_action = menu.addAction(qta.icon('fa5s.map-marker-alt', color='#D32F2F'), "Lokasyonları Düzenle")
-        floors_action = menu.addAction(qta.icon('fa5s.building', color='#D32F2F'), "Katları Düzenle")
-        new_param_action = menu.addAction(qta.icon('fa5s.plus-circle', color='#D32F2F'), TRANSLATIONS["new_combobox_param"])
+        dialog = QDialog(self)
+        dialog.setWindowTitle(TRANSLATIONS["combobox_management"])
+        layout = QVBoxLayout(dialog)
 
-        groups_action.triggered.connect(lambda: self.edit_combobox("Demirbaş Cinsleri", self.groups, GROUPS_FILE))
-        regions_action.triggered.connect(lambda: self.edit_combobox("Lokasyonlar", self.regions, REGIONS_FILE))
-        floors_action.triggered.connect(lambda: self.edit_combobox("Katlar", self.floors, FLOORS_FILE))
-        new_param_action.triggered.connect(self.add_new_combobox_param)
+        groups_button = QPushButton(TRANSLATIONS["edit_groups"])
+        groups_button.clicked.connect(lambda: self.edit_combobox(TRANSLATIONS["edit_groups"], self.groups, GROUPS_FILE))
+        layout.addWidget(groups_button)
 
-        menu.exec_(QCursor.pos())
+        regions_button = QPushButton(TRANSLATIONS["edit_regions"])
+        regions_button.clicked.connect(lambda: self.edit_combobox(TRANSLATIONS["edit_regions"], self.regions, REGIONS_FILE))
+        layout.addWidget(regions_button)
+
+        floors_button = QPushButton(TRANSLATIONS["edit_floors"])
+        floors_button.clicked.connect(lambda: self.edit_combobox(TRANSLATIONS["edit_floors"], self.floors, FLOORS_FILE))
+        layout.addWidget(floors_button)
+
+        close_button = QPushButton(TRANSLATIONS["close_item"])
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button)
+        dialog.exec_()
 
     def edit_combobox(self, title, items, file_path):
         dialog = ComboBoxEditDialog(self, title, items, file_path)
         dialog.exec_()
 
-    def add_new_combobox_param(self):
-        dialog = AddParameterDialog(self)
-        dialog.type_combo.setCurrentText("ComboBox")
-        dialog.file_entry.setEnabled(True)
-        if dialog.exec_():
-            name, section, param_type, combobox_file = dialog.get_data()
-            if name and combobox_file and name not in self.get_column_headers():
-                if not os.path.exists(combobox_file):
-                    default_data = [{"name": "Varsayılan", "code": "DEF"}]
-                    self.save_json_data(combobox_file, default_data)
-                cursor = self.conn.cursor()
-                cursor.execute("SELECT MAX(column_order) FROM metadata")
-                max_order = cursor.fetchone()[0] or 0
-                cursor.execute("INSERT INTO metadata (column_name, column_order, section, type, combobox_file) VALUES (?, ?, ?, ?, ?)",
-                               (name, max_order + 1, section, param_type, combobox_file))
-                self.conn.commit()
-                self.config["combobox_files"][name] = combobox_file
-                self.save_config()
-                self.setup_inventory_tab()
-                self.update_comboboxes()
-                QMessageBox.information(self, "Başarılı", f"'{name}' ComboBox parametresi eklendi!")
+    def restore_backup(self):
+        backup_file = self.restore_combo.currentText()
+        if not backup_file:
+            QMessageBox.warning(self, "Hata", "Lütfen bir yedek dosyası seçin!")
+            return
 
-    def save_current_form(self):
-        logging.info("Form otomatik kaydedildi.")
+        if QMessageBox.question(self, "Onay 1", TRANSLATIONS["confirm_restore_1"],
+                                QMessageBox.Yes | QMessageBox.No) == QMessageBox.No:
+            return
+        if QMessageBox.question(self, "Onay 2", TRANSLATIONS["confirm_restore_2"],
+                                QMessageBox.Yes | QMessageBox.No) == QMessageBox.No:
+            return
+        if QMessageBox.question(self, "Son Onay", TRANSLATIONS["confirm_restore_3"],
+                                QMessageBox.Yes | QMessageBox.No) == QMessageBox.No:
+            return
 
-    def close_application(self):
-        self.conn.close()
-        self.close()
+        backup_path = os.path.join(self.config["backup_path"], backup_file)
+        try:
+            self.conn.close()
+            shutil.copy2(backup_path, DB_FILE)
+            self.conn = sqlite3.connect(DB_FILE)
+            QMessageBox.information(self, "Başarılı", TRANSLATIONS["restore_success"])
+            logging.info(f"Yedek geri yüklendi: {backup_path}")
+            self.load_data_from_db()
+            self.load_archive_from_db()
+            self.setup_inventory_tab()
+        except Exception as e:
+            logging.error(f"Yedek geri yükleme hatası: {str(e)}")
+            QMessageBox.critical(self, "Hata", f"Yedek geri yüklenemedi: {str(e)}")
+            self.conn = sqlite3.connect(DB_FILE)
+
+    def get_column_headers(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT column_name FROM metadata ORDER BY column_order")
+        return [row[0] for row in cursor.fetchall()]
 
     def create_or_update_tables(self):
         cursor = self.conn.cursor()
         cursor.execute('''CREATE TABLE IF NOT EXISTS inventory (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            data TEXT,
-                            timestamp TEXT)''')
+                            data TEXT NOT NULL,
+                            timestamp TEXT NOT NULL)''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS archive (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            data TEXT,
-                            timestamp TEXT)''')
+                            data TEXT NOT NULL,
+                            timestamp TEXT NOT NULL)''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS metadata (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            column_name TEXT UNIQUE,
+                            column_name TEXT PRIMARY KEY,
                             column_order INTEGER,
                             section TEXT,
                             type TEXT DEFAULT 'Metin',
                             combobox_file TEXT)''')
 
-        default_metadata = [
-            ("Demirbaş Kodu", 0, TRANSLATIONS["card_info"], "Metin", None),
-            (TRANSLATIONS["group_name"], 1, TRANSLATIONS["card_info"], "ComboBox", GROUPS_FILE),
-            (TRANSLATIONS["item_name"], 2, TRANSLATIONS["card_info"], "Metin", None),
-            (TRANSLATIONS["region"], 3, TRANSLATIONS["card_info"], "ComboBox", REGIONS_FILE),
-            (TRANSLATIONS["floor"], 4, TRANSLATIONS["card_info"], "ComboBox", FLOORS_FILE),
-            (TRANSLATIONS["quantity"], 5, TRANSLATIONS["card_info"], "Metin", None),
-            (TRANSLATIONS["photo"], 6, TRANSLATIONS["card_info"], "Metin", None),
-            (TRANSLATIONS["brand"], 7, TRANSLATIONS["card_info"], "Metin", None),
-            (TRANSLATIONS["model"], 8, TRANSLATIONS["card_info"], "Metin", None),
-            ("Edinim Tarihi", 9, TRANSLATIONS["card_info"], "Tarih", None),
-            (TRANSLATIONS["invoice_no"], 10, TRANSLATIONS["invoice_info"], "Metin", None),
-            (TRANSLATIONS["company"], 11, TRANSLATIONS["invoice_info"], "Metin", None),
-            ("Bağışçı", 12, TRANSLATIONS["invoice_info"], "Metin", None),
-            ("Özellikler", 13, TRANSLATIONS["invoice_info"], "Metin", None),
-            (TRANSLATIONS["status"], 14, TRANSLATIONS["service_info"], "Metin", None),
-            (TRANSLATIONS["warranty_period"], 15, TRANSLATIONS["service_info"], "Tarih", None),
-            (TRANSLATIONS["description"], 16, TRANSLATIONS["service_info"], "Metin", None)
+        default_headers = [
+            ("Demirbaş Kodu", 1, TRANSLATIONS["card_info"], "Metin", None),
+            (TRANSLATIONS["group_name"], 2, TRANSLATIONS["card_info"], "ComboBox", GROUPS_FILE),
+            (TRANSLATIONS["item_name"], 3, TRANSLATIONS["card_info"], "Metin", None),
+            (TRANSLATIONS["region"], 4, TRANSLATIONS["card_info"], "ComboBox", REGIONS_FILE),
+            (TRANSLATIONS["floor"], 5, TRANSLATIONS["card_info"], "ComboBox", FLOORS_FILE),
+            (TRANSLATIONS["quantity"], 6, TRANSLATIONS["card_info"], "Metin", None),
+            (TRANSLATIONS["photo"], 7, TRANSLATIONS["card_info"], "Metin", None),
+            (TRANSLATIONS["brand"], 8, TRANSLATIONS["invoice_info"], "Metin", None),
+            (TRANSLATIONS["model"], 9, TRANSLATIONS["invoice_info"], "Metin", None),
+            ("Edinim Tarihi", 10, TRANSLATIONS["invoice_info"], "Tarih", None),
+            (TRANSLATIONS["invoice_no"], 11, TRANSLATIONS["invoice_info"], "Metin", None),
+            (TRANSLATIONS["company"], 12, TRANSLATIONS["invoice_info"], "Metin", None),
+            ("Bağışçı", 13, TRANSLATIONS["invoice_info"], "Metin", None),
+            ("Özellikler", 14, TRANSLATIONS["invoice_info"], "Metin", None),
+            (TRANSLATIONS["status"], 15, TRANSLATIONS["service_info"], "Metin", None),
+            (TRANSLATIONS["description"], 16, TRANSLATIONS["service_info"], "Metin", None),
+            (TRANSLATIONS["warranty_period"], 17, TRANSLATIONS["service_info"], "Tarih", None)
         ]
 
-        cursor.execute("SELECT column_name FROM metadata")
-        existing_columns = [row[0] for row in cursor.fetchall()]
-        for column_name, order, section, param_type, combobox_file in default_metadata:
-            if column_name not in existing_columns:
-                cursor.execute("INSERT INTO metadata (column_name, column_order, section, type, combobox_file) VALUES (?, ?, ?, ?, ?)",
-                               (column_name, order, section, param_type, combobox_file))
-            elif column_name in [TRANSLATIONS["group_name"], TRANSLATIONS["region"], TRANSLATIONS["floor"]]:
-                cursor.execute("UPDATE metadata SET combobox_file = ? WHERE column_name = ?", (combobox_file, column_name))
+        for header, order, section, param_type, combobox_file in default_headers:
+            cursor.execute("INSERT OR IGNORE INTO metadata (column_name, column_order, section, type, combobox_file) VALUES (?, ?, ?, ?, ?)",
+                           (header, order, section, param_type if param_type else "Metin", combobox_file if combobox_file else None))
         self.conn.commit()
-
-    def get_column_headers(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT column_name FROM metadata ORDER BY column_order")
-        headers = [row[0] for row in cursor.fetchall()]
-        logging.info(f"Current column headers: {headers}")
-        return headers
-
-class ColumnSelectionDialog(QDialog):
-    def __init__(self, headers, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Sütun Seçimi")
-        self.headers = headers
-        self.selected_headers = []
-
-        layout = QVBoxLayout(self)
-        self.checkboxes = {}
-        for header in headers:
-            checkbox = QCheckBox(header)
-            checkbox.setChecked(True)
-            self.checkboxes[header] = checkbox
-            layout.addWidget(checkbox)
-
-        button_layout = QHBoxLayout()
-        select_all_button = QPushButton("Hepsini Seç")
-        select_all_button.clicked.connect(self.select_all)
-        button_layout.addWidget(select_all_button)
-
-        deselect_all_button = QPushButton("Hepsini Kaldır")
-        deselect_all_button.clicked.connect(self.deselect_all)
-        button_layout.addWidget(deselect_all_button)
-
-        layout.addLayout(button_layout)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def select_all(self):
-        for checkbox in self.checkboxes.values():
-            checkbox.setChecked(True)
-
-    def deselect_all(self):
-        for checkbox in self.checkboxes.values():
-            checkbox.setChecked(False)
-
-    def get_selected_columns(self):
-        self.selected_headers = [header for header, checkbox in self.checkboxes.items() if checkbox.isChecked()]
-        return self.selected_headers
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

@@ -1451,19 +1451,29 @@ class InventoryApp(QMainWindow):
             for header, value in zip(headers, data):
                 section = next((m[1] for m in metadata if m[0] == header), TRANSLATIONS["card_info"])
                 label = QLabel(f"{header}:")
-                label.setStyleSheet("font-weight: bold;")
-                value_label = QLabel(value)
-                value_label.setWordWrap(True)
-                value_label.setStyleSheet("margin-left: 10px;")
+                label.setStyleSheet("font-weight: bold; font-size: 14px;")  # Başlık fontunu büyüttük
+
+                # "Açıklama" ve "Not" için özel işlem
+                if header == TRANSLATIONS["description"] or header == TRANSLATIONS["note"]:
+                    value_widget = QTextEdit(value)
+                    value_widget.setReadOnly(True)
+                    value_widget.setStyleSheet("font-size: 14px; margin-left: 10px; padding: 5px; border: 1px solid #ccc;")
+                    value_widget.setMinimumHeight(100)  # Daha fazla satır için minimum yükseklik artırıldı
+                    value_widget.setWordWrapMode(QTextOption.WordWrap)  # Kelime kaydırma etkin
+                    value_widget.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)  # Dikey kaydırma çubuğu eklendi
+                else:
+                    value_widget = QLabel(value)
+                    value_widget.setStyleSheet("font-size: 14px; margin-left: 10px;")
+                    value_widget.setWordWrap(True)
 
                 if section == TRANSLATIONS["card_info"]:
-                    card_layout.addRow(label, value_label)
+                    card_layout.addRow(label, value_widget)
                     card_count += 1
                 elif section == TRANSLATIONS["invoice_info"]:
-                    invoice_layout.addRow(label, value_label)
+                    invoice_layout.addRow(label, value_widget)
                     invoice_count += 1
                 elif section == TRANSLATIONS["service_info"]:
-                    service_layout.addRow(label, value_label)
+                    service_layout.addRow(label, value_widget)
                     service_count += 1
 
             tabs.addTab(card_tab, f"{TRANSLATIONS['card_info']} ({card_count})")
@@ -1476,7 +1486,7 @@ class InventoryApp(QMainWindow):
                 code = data[code_idx]
                 decoded_info = self.decode_inventory_code(code)
                 code_label = QLabel(f"Kod Çözümleme: {decoded_info}")
-                code_label.setStyleSheet("font-weight: bold; color: #D32F2F; margin-top: 10px;")
+                code_label.setStyleSheet("font-weight: bold; color: #D32F2F; font-size: 14px; margin-top: 10px;")
                 layout.addWidget(code_label)
 
             button_layout = QHBoxLayout()

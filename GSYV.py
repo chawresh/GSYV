@@ -22,6 +22,7 @@ import shutil
 import logging
 import glob
 import time
+import openpyxl
 from datetime import datetime
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image

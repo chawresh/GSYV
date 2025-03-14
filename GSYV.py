@@ -2302,11 +2302,14 @@ class InventoryApp(QMainWindow):
                     if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames():
                         font_path = resource_path(os.path.join("files", "DejaVuSans.ttf"))
                         if os.path.exists(font_path):
-                            pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
-                            logging.info(f"DejaVuSans.ttf yüklendi: {font_path}")
+                            #pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
+                            #logging.info(f"DejaVuSans.ttf yüklendi: {font_path}")
+                            pdfmetrics.registerFont(TTFont("DejaVuSans", "C:\DejaVuSans.ttf"))
+                            logging.info(f"DejaVuSans.ttf yüklendi: C:\DejaVuSans.ttf")
                         else:
                             logging.warning("DejaVuSans.ttf bulunamadı, Helvetica kullanılıyor.")
-                            pdfmetrics.registerFont(TTFont("Helvetica", "Helvetica"))  # Yedek font
+                            #pdfmetrics.registerFont(TTFont("Helvetica", "Helvetica"))  # Yedek font
+                            pdfmetrics.registerFont(TTFont("Helvetica", "C:\Helvetica.ttf"))  # Yedek font
                             QMessageBox.warning(self, "Uyarı", "Türkçe karakter desteği için DejaVuSans.ttf bulunamadı.")
 
                     # Başlık

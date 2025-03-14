@@ -25,7 +25,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: windows-exe
-        path: dist/GSYV ENVANTER SİSTEMİ.exe
+        path: dist/GSYV_last.exe
         if-no-files-found: error  # Dosya bulunamazsa hata ver
 
   build-macos:
@@ -47,5 +47,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: macos-app
-        path: dist/GSYV ENVANTER SİSTEMİ.app
+        path: dist/GSYV_last.app
         if-no-files-found: error  # Dosya bulunamazsa hata ver

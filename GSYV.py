@@ -515,23 +515,30 @@ class InventoryApp(QMainWindow):
         super().__init__()
 
         self.os_name = platform.system()
-        self.default_font = "DejaVuSans"
-        font_path = resource_path(os.path.join("files", "DejaVuSans.ttf"))
+        self.default_font = "DejaVuSans"  # Başlangıçta tercih edilen font
+        dejavu_font_path = resource_path("files/DejaVuSans.ttf")
+        helvetica_font_path = resource_path("files/Helvetica.ttf")
 
         try:
-            if os.path.exists(font_path):
-                pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
-                logging.info(f"DejaVuSans.ttf başarıyla yüklendi: {font_path}")
+            if os.path.exists(dejavu_font_path):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", dejavu_font_path))
+                self.default_font = "DejaVuSans"
+                logging.info(f"DejaVuSans.ttf başarıyla yüklendi: {dejavu_font_path}")
                 plt.rcParams['font.family'] = 'DejaVu Sans'
-            else:
-                pdfmetrics.registerFont(TTFont("Helvetica", "Helvetica"))
+            elif os.path.exists(helvetica_font_path):
+                pdfmetrics.registerFont(TTFont("Helvetica", helvetica_font_path))
                 self.default_font = "Helvetica"
-                logging.warning(f"DejaVuSans.ttf bulunamadı: {font_path}, Helvetica kullanılıyor.")
+                logging.info(f"Helvetica.ttf yüklendi: {helvetica_font_path}")
                 plt.rcParams['font.family'] = 'Helvetica'
+            else:
+                # Font dosyaları bulunamazsa, standart bir yedek font kullan
+                self.default_font = "Times"  # reportlab için standart serif font
+                logging.warning("DejaVuSans.ttf ve Helvetica.ttf bulunamadı, standart 'Times' fontu kullanılacak.")
+                plt.rcParams['font.family'] = 'sans-serif'  # matplotlib için genel sans-serif font ailesi
+                # Times, reportlab tarafından varsayılan olarak tanınır, ek kayıt gerekmez
         except Exception as e:
-            logging.error(f"Font kaydı hatası: {str(e)}. Helvetica kullanılıyor.")
-            self.default_font = "Helvetica"
-            plt.rcParams['font.family'] = 'Helvetica'
+            logging.error(f"Font kaydı hatası: {str(e)}")
+            raise
 
         self.setWindowTitle(TRANSLATIONS["title"])
         self.setGeometry(100, 100, 1200, 700)
@@ -2937,7 +2944,7 @@ class InventoryApp(QMainWindow):
             except Exception as e:
                 logging.error(f"Analiz verisi dışa aktarma hatası: {str(e)}")
                 QMessageBox.critical(self, "Hata", f"Analiz verisi dışa aktarma başarısız: {str(e)}")
-                
+
 
     def manage_comboboxes(self):
         dialog = QDialog(self)
@@ -3053,5 +3060,6 @@ if __name__ == "__main__":
     window = InventoryApp()
     window.show()
     sys.exit(app.exec_())
+
 
 

@@ -1,6 +1,5 @@
 name: Build EXE and APP
 
-
 on:
   push:
     branches:
@@ -14,20 +13,20 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
+        python-version: '3.10.6'
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install pyinstaller pandas numpy PyQt5 qtawesome reportlab mplcursors
     - name: Build EXE
       run: |
-        pyinstaller --onefile --noconsole --icon=logo.ico --hidden-import=PyQt5.QtWidgets --hidden-import=PyQt5.QtGui --hidden-import=PyQt5.QtCore --hidden-import=qtawesome --hidden-import=reportlab --add-data "DejaVuSans.ttf;." --add-data "Helvetica.ttf;." "GSYV.py"
+        pyinstaller --onefile --noconsole --icon=logo.ico --hidden-import=PyQt5.QtWidgets --hidden-import=PyQt5.QtGui --hidden-import=PyQt5.QtCore --hidden-import=qtawesome --hidden-import=reportlab --add-data "DejaVuSans.ttf;files" --add-data "Helvetica.ttf;files" --add-data "logo.png;files" --add-data "groups.json;files" --add-data "regions.json;files" --add-data "floors.json;files" "GSYV.py"
     - name: Upload EXE
       uses: actions/upload-artifact@v4
       with:
         name: windows-exe
         path: dist/GSYV.exe
-        if-no-files-found: error  # Dosya bulunamazsa hata ver
+        if-no-files-found: error
 
   build-macos:
     runs-on: macos-latest
@@ -36,17 +35,17 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
+        python-version: '3.10.6'
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install pyinstaller pandas numpy PyQt5 qtawesome reportlab mplcursors
     - name: Build APP
       run: |
-        pyinstaller --onefile --noconsole --icon=logo.icns --hidden-import=PyQt5.QtWidgets --hidden-import=PyQt5.QtGui --hidden-import=PyQt5.QtCore --hidden-import=qtawesome --hidden-import=reportlab --add-data "DejaVuSans.ttf:." --add-data "Helvetica.ttf:." "GSYV.py"
+        pyinstaller --onefile --noconsole --icon=logo.icns --hidden-import=PyQt5.QtWidgets --hidden-import=PyQt5.QtGui --hidden-import=PyQt5.QtCore --hidden-import=qtawesome --hidden-import=reportlab --add-data "DejaVuSans.ttf:files" --add-data "Helvetica.ttf:files" --add-data "logo.png:files" --add-data "groups.json:files" --add-data "regions.json:files" --add-data "floors.json:files" "GSYV.py"
     - name: Upload APP
       uses: actions/upload-artifact@v4
       with:
         name: macos-app
         path: dist/GSYV.app
-        if-no-files-found: error  # Dosya bulunamazsa hata ver
+        if-no-files-found: error

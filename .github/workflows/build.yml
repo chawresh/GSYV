@@ -17,10 +17,10 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyinstaller pandas numpy PyQt5 qtawesome reportlab
+        pip install pyinstaller pandas numpy PyQt5 qtawesome reportlab mplcursors
     - name: Build EXE
       run: |
-        pyinstaller --onefile --noconsole --icon=logo.ico --hidden-import=PyQt5.QtWidgets --hidden-import=PyQt5.QtGui --hidden-import=PyQt5.QtCore --hidden-import=qtawesome --hidden-import=reportlab "GSYV ENVANTER SİSTEMİ.py"
+        pyinstaller --onefile --noconsole --icon=logo.ico --hidden-import=PyQt5.QtWidgets --hidden-import=PyQt5.QtGui --hidden-import=PyQt5.QtCore --hidden-import=qtawesome --hidden-import=reportlab "GSYV_last.py"
     - name: Upload EXE
       uses: actions/upload-artifact@v4
       with:
@@ -39,10 +39,10 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyinstaller pandas numpy PyQt5 qtawesome reportlab
+        pip install pyinstaller pandas numpy PyQt5 qtawesome reportlab mplcursors
     - name: Build APP
       run: |
-        pyinstaller --onefile --noconsole --icon=logo.icns --hidden-import=PyQt5.QtWidgets --hidden-import=PyQt5.QtGui --hidden-import=PyQt5.QtCore --hidden-import=qtawesome --hidden-import=reportlab "GSYV ENVANTER SİSTEMİ.py"
+        pyinstaller --onefile --noconsole --icon=logo.icns --hidden-import=PyQt5.QtWidgets --hidden-import=PyQt5.QtGui --hidden-import=PyQt5.QtCore --hidden-import=qtawesome --hidden-import=reportlab "GSYV_last.py"
     - name: Upload APP
       uses: actions/upload-artifact@v4
       with:

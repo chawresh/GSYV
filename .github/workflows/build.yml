@@ -1,6 +1,5 @@
 name: Build EXE and APP
 
-
 on:
   push:
     branches:

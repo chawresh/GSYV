@@ -2306,7 +2306,7 @@ class InventoryApp(QMainWindow):
                             #pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
                             #logging.info(f"DejaVuSans.ttf yüklendi: {font_path}")
                             pdfmetrics.registerFont(TTFont("DejaVuSans", "C:\GSYV-main\DejaVuSans.ttf"))
-                            logging.info(f"DejaVuSans.ttf yüklendi: "C:\GSYV-main\DejaVuSans.ttf")
+                            logging.info(f"DejaVuSans.ttf yüklendi", "C:\GSYV-main\DejaVuSans.ttf")
                         else:
                             logging.warning("DejaVuSans.ttf bulunamadı, Helvetica kullanılıyor.")
                             #pdfmetrics.registerFont(TTFont("Helvetica", "C:\GSYV-main\Helvetica.ttf"))  # Yedek font

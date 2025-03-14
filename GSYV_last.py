@@ -1669,6 +1669,7 @@ class InventoryApp(QMainWindow):
         try:
             cursor.execute("SELECT data FROM inventory WHERE id = ?", (row_id,))
             data = json.loads(cursor.fetchone()[0])
+            headers = self.get_column_headers()  # Sütun başlıklarını al
             data[headers.index("Demirbaş Kodu")] = self.generate_inventory_code(
                 data[headers.index(TRANSLATIONS["group_name"])],
                 data[headers.index(TRANSLATIONS["region"])],

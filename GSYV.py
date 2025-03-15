@@ -178,8 +178,8 @@ DEFAULT_REGIONS = [
     {"name": "Teras", "code": "TER"}
 ]
 DEFAULT_FLOORS = [
-    {"name": "Kat -2", "code": "K-2"},
-    {"name": "Kat -1", "code": "K-1"},
+    {"name": "Kat -2", "code": "KE2"},
+    {"name": "Kat -1", "code": "KE1"},
     {"name": "Kat 0", "code": "K00"},
     {"name": "Kat 1", "code": "K01"},
     {"name": "Kat 2", "code": "K02"},
@@ -655,15 +655,6 @@ class InventoryApp(QMainWindow):
             logging.error(f"{file_path} kaydedilirken hata: {str(e)}")
             QMessageBox.critical(self, "Hata", f"Dosya yazılamadı: {file_path}")
 
-    def generate_shortcode(self, name, existing_codes):
-        shortcode = name[:3].upper()
-        if shortcode in existing_codes:
-            i = 1
-            while f"{shortcode}{i}" in existing_codes:
-                i += 1
-            shortcode = f"{shortcode}{i}"
-        return shortcode
-
     def update_comboboxes(self):
         self.groups = self.load_json_data(self.config["combobox_files"][TRANSLATIONS["group_name"]], DEFAULT_GROUPS)
         self.regions = self.load_json_data(self.config["combobox_files"][TRANSLATIONS["region"]], DEFAULT_REGIONS)
@@ -734,7 +725,7 @@ class InventoryApp(QMainWindow):
         code = f"{group_code}-{region_code}-{floor_code}"
         logging.info(f"Oluşturulan kod: {code}")
         return code
-
+      
     def generate_shortcode(self, name, existing_codes):
         shortcode = name[:3].upper()
         if shortcode in existing_codes:
@@ -743,7 +734,6 @@ class InventoryApp(QMainWindow):
                 i += 1
             shortcode = f"{shortcode}{i}"
         return shortcode
-
     def decode_inventory_code(self, code):
         try:
             if not isinstance(code, str) or not code:

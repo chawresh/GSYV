@@ -468,18 +468,18 @@ class EditDialog(QDialog):
             entry.clear()
 
 
-
     def select_photo(self, entry):
         file_name, _ = QFileDialog.getOpenFileName(self, "Fotoğraf Seç", "", "Resim Dosyaları (*.png *.jpg *.jpeg)")
         if file_name:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             unique_id = uuid.uuid4().hex[:8]
             extension = os.path.splitext(file_name)[1]
-            new_file_name = os.path.join(self.parent.config["photos_dir"], f"photo_{timestamp}_{unique_id}{extension}")
+            new_file_name = f"photo_{timestamp}_{unique_id}{extension}"
+            destination_path = os.path.join(self.parent.config["photos_dir"], new_file_name)
             try:
-                shutil.copy2(file_name, new_file_name)
-                entry.setText(os.path.basename(new_file_name))  # Yalnızca dosya adını sakla
-                logging.info(f"Fotoğraf {new_file_name} olarak kopyalandı.")
+                shutil.copy2(file_name, destination_path)
+                entry.setText(new_file_name)  # Yalnızca dosya adını sakla
+                logging.info(f"Fotoğraf {destination_path} olarak kopyalandı.")
             except IOError as e:
                 logging.error(f"Fotoğraf kopyalanamadı: {str(e)}")
                 QMessageBox.critical(self, "Hata", f"Fotoğraf kopyalanamadı: {str(e)}")
@@ -500,13 +500,10 @@ class EditDialog(QDialog):
                 elif header == "Bağışçı" and f"{header}_check" in self.entries and self.entries[f"{header}_check"].isChecked():
                     value = ""
                 elif header == TRANSLATIONS["photo"]:
-                    # Fotoğraf için özel kontrol
                     if f"{header}_check" in self.entries and self.entries[f"{header}_check"].isChecked():
                         value = ""  # Fotoğraf yoksa boş
                     else:
-                        value = self.entries[header].text()  # Yeni seçilen fotoğrafın dosya adı
-                        if not value:  # Eğer hala boşsa, eski değeri koruma
-                            value = self.row_data[self.headers.index(header)]
+                        value = self.entries[header].text() or ""  # Yeni seçilen fotoğraf ya da boş
                 else:
                     value = self.entries[header].text()
                 data.append(value)
@@ -1774,7 +1771,7 @@ class InventoryApp(QMainWindow):
             new_code = self.generate_inventory_code(new_group, new_region, new_floor)
             new_data[code_idx] = new_code
             
-            # Eski fotoğrafı kontrol et ve gerekirse temizle
+            # Eski fotoğrafı kontrol et ve temizle
             row_id = row_data[0].data(Qt.UserRole)
             cursor = self.conn.cursor()
             cursor.execute("SELECT data FROM inventory WHERE id = ?", (row_id,))
@@ -1791,17 +1788,19 @@ class InventoryApp(QMainWindow):
                 cursor.execute("INSERT INTO inventory (data, timestamp) VALUES (?, ?)",
                               (json.dumps(new_data), timestamp))
                 
+                # Eski fotoğrafı temizle (eğer yeni fotoğraftan farklıysa ve varsa)
+                if old_photo and old_photo != new_photo:
+                    old_photo_path = os.path.join(self.config["photos_dir"], old_photo)
+                    if os.path.exists(old_photo_path):
+                        try:
+                            os.remove(old_photo_path)
+                            logging.info(f"Eski fotoğraf silindi: {old_photo_path}")
+                        except OSError as e:
+                            logging.error(f"Eski fotoğraf silinemedi: {str(e)}")
+                            QMessageBox.warning(self, "Uyarı", f"Eski fotoğraf silinemedi: {str(e)}")
+                
                 self.conn.commit()
                 self.load_data_from_db()
-                
-                # Eski fotoğraf dosyası yeni fotoğraftan farklıysa ve hala varsa, sil (isteğe bağlı)
-                if old_photo and old_photo != new_photo and os.path.exists(os.path.join(self.config["photos_dir"], old_photo)):
-                    try:
-                        os.remove(os.path.join(self.config["photos_dir"], old_photo))
-                        logging.info(f"Eski fotoğraf silindi: {old_photo}")
-                    except OSError as e:
-                        logging.error(f"Eski fotoğraf silinemedi: {str(e)}")
-                
                 QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_updated"])
                 logging.info(f"Envanter güncellendi: Eski ID {row_id}, Yeni Kod: {new_code}, Fotoğraf: {new_photo}")
             except sqlite3.Error as e:
@@ -1908,7 +1907,6 @@ class InventoryApp(QMainWindow):
             # Fotoğrafı en üste ekle
             photo_idx = headers.index(TRANSLATIONS["photo"]) if TRANSLATIONS["photo"] in headers else -1
             if photo_idx != -1 and data[photo_idx]:
-                # photos_dir ile birleştir
                 photo_path = os.path.join(self.config["photos_dir"], data[photo_idx])
                 photo_label = QLabel("Demirbaş Fotoğrafı:")
                 photo_label.setStyleSheet("font-weight: bold; font-size: 14px;")
@@ -1934,6 +1932,7 @@ class InventoryApp(QMainWindow):
                 photo_label.setStyleSheet("font-weight: bold; font-size: 14px;")
                 layout.addWidget(photo_label)
                 layout.addSpacing(10)
+
 
             # Sekmeli yapı
             tabs = QTabWidget()

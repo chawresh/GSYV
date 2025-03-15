@@ -681,6 +681,11 @@ class InventoryApp(QMainWindow):
                 item = self.table.item(row, group_idx)
                 self.table.setRowHidden(row, item.text() != group if item else True)
 
+    def get_column_headers(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT column_name FROM metadata ORDER BY column_order")
+        return [row[0] for row in cursor.fetchall()]
+
 
     def copy_initial_files(self):
         """ Paket içindeki başlangıç dosyalarını config'deki files_dir'e kopyalar """
@@ -3063,56 +3068,6 @@ def open_edit_dialog(self):
         self.conn.close()
         QApplication.quit()
 
-    def create_or_update_tables(self):
-        cursor = self.conn.cursor()
-        cursor.execute('''CREATE TABLE IF NOT EXISTS inventory (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            data TEXT NOT NULL,
-                            timestamp TEXT NOT NULL)''')
-        cursor.execute('''CREATE TABLE IF NOT EXISTS archive (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            data TEXT NOT NULL,
-                            timestamp TEXT NOT NULL)''')
-        cursor.execute('''CREATE TABLE IF NOT EXISTS metadata (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            column_name TEXT NOT NULL,
-                            section TEXT NOT NULL,
-                            type TEXT NOT NULL,
-                            combobox_file TEXT,
-                            column_order INTEGER NOT NULL)''')
-
-        cursor.execute("SELECT column_name FROM metadata")
-        existing_columns = [row[0] for row in cursor.fetchall()]
-        default_columns = [
-            ("Demirbaş Kodu", TRANSLATIONS["card_info"], "Metin", None, 1),
-            (TRANSLATIONS["group_name"], TRANSLATIONS["card_info"], "ComboBox", self.config["combobox_files"][TRANSLATIONS["group_name"]], 2),
-            (TRANSLATIONS["item_name"], TRANSLATIONS["card_info"], "Metin", None, 3),
-            (TRANSLATIONS["region"], TRANSLATIONS["card_info"], "ComboBox", self.config["combobox_files"][TRANSLATIONS["region"]], 4),
-            (TRANSLATIONS["floor"], TRANSLATIONS["card_info"], "ComboBox", self.config["combobox_files"][TRANSLATIONS["floor"]], 5),
-            (TRANSLATIONS["quantity"], TRANSLATIONS["card_info"], "Metin", None, 6),
-            ("Edinim Tarihi", TRANSLATIONS["card_info"], "Tarih", None, 7),
-            (TRANSLATIONS["photo"], TRANSLATIONS["card_info"], "Metin", None, 8),
-            (TRANSLATIONS["brand"], TRANSLATIONS["invoice_info"], "Metin", None, 9),
-            (TRANSLATIONS["model"], TRANSLATIONS["invoice_info"], "Metin", None, 10),
-            (TRANSLATIONS["invoice_no"], TRANSLATIONS["invoice_info"], "Metin", None, 11),
-            ("Bağışçı", TRANSLATIONS["invoice_info"], "Metin", None, 12),
-            (TRANSLATIONS["company"], TRANSLATIONS["invoice_info"], "Metin", None, 13),
-            ("Özellikler", TRANSLATIONS["invoice_info"], "Metin", None, 14),
-            (TRANSLATIONS["status"], TRANSLATIONS["service_info"], "Metin", None, 15),
-            (TRANSLATIONS["warranty_period"], TRANSLATIONS["service_info"], "Tarih", None, 16),
-            (TRANSLATIONS["description"], TRANSLATIONS["service_info"], "Metin", None, 17)
-        ]
-
-        for column_name, section, param_type, combobox_file, order in default_columns:
-            if column_name not in existing_columns:
-                cursor.execute("INSERT INTO metadata (column_name, section, type, combobox_file, column_order) VALUES (?, ?, ?, ?, ?)",
-                               (column_name, section, param_type, combobox_file, order))
-        self.conn.commit()
-
-    def get_column_headers(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT column_name FROM metadata ORDER BY column_order")
-        return [row[0] for row in cursor.fetchall()]
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

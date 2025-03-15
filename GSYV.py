@@ -1799,7 +1799,7 @@ class InventoryApp(QMainWindow):
                 # Yeni kaydı ekle
                 cursor.execute("INSERT INTO inventory (data, timestamp) VALUES (?, ?)",
                               (json.dumps(new_data), timestamp))
-                
+"""                
                 # Eski fotoğrafı temizle (eğer yeni fotoğraftan farklıysa ve varsa)
                 if old_photo and old_photo != new_photo:
                     old_photo_path = os.path.join(self.config["photos_dir"], old_photo)
@@ -1810,7 +1810,7 @@ class InventoryApp(QMainWindow):
                         except OSError as e:
                             logging.error(f"Eski fotoğraf silinemedi: {str(e)}")
                             QMessageBox.warning(self, "Uyarı", f"Eski fotoğraf silinemedi: {str(e)}")
-                
+                """
                 self.conn.commit()
                 self.load_data_from_db()
                 QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_updated"])

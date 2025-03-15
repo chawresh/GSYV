@@ -344,6 +344,7 @@ class EditDialog(QDialog):
         self.headers = headers or []
         self.entries = {}
 
+        # Veritabanından mevcut veriyi çekme
         cursor = self.parent.conn.cursor()
         if row_data:
             if isinstance(row_data[0], QTableWidgetItem):
@@ -357,15 +358,18 @@ class EditDialog(QDialog):
         else:
             full_data = [""] * len(self.headers)
 
+        # Veriyi başlık sayısına göre ayarlama
         self.row_data = full_data if len(full_data) >= len(self.headers) else full_data + [""] * (len(self.headers) - len(full_data))
         if len(self.row_data) > len(self.headers):
             self.row_data = self.row_data[:len(self.headers)]
 
+        # Form düzeni oluşturma
         layout = QFormLayout(self)
         cursor.execute("SELECT column_name, type, combobox_file FROM metadata ORDER BY column_order")
         metadata = cursor.fetchall()
         param_types = {row[0]: (row[1], row[2]) for row in metadata}
 
+        # Her başlık için alan oluşturma
         for i, header in enumerate(self.headers):
             label = QLabel(header)
             param_type, combobox_file = param_types.get(header, ("Metin", None))
@@ -421,7 +425,8 @@ class EditDialog(QDialog):
                 entry.setReadOnly(True)
                 self.entries[header] = entry
                 browse_button = QPushButton("Dosya Seç")
-                browse_button.clicked.connect(lambda: self.select_photo(entry))
+                # Doğru entry nesnesini select_photo metoduna bağlama
+                browse_button.clicked.connect(lambda checked, e=entry: self.select_photo(e))
                 photo_layout.addWidget(entry)
                 photo_layout.addWidget(browse_button)
                 no_photo_check = QCheckBox(TRANSLATIONS["no_photo"])
@@ -446,6 +451,7 @@ class EditDialog(QDialog):
                 self.entries[header] = entry
             layout.addRow(label, self.entries[header])
 
+        # Onay ve iptal düğmeleri
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -453,6 +459,9 @@ class EditDialog(QDialog):
 
         self.setMinimumSize(600, 400)
         self.resize(800, 800)
+
+        # Hata ayıklama için entries içeriğini loglama (isteğe bağlı)
+        logging.info(f"EditDialog entries: {[k for k in self.entries.keys()]}")
 
     def toggle_date(self, date_edit, state):
         date_edit.setEnabled(state == Qt.Unchecked)
@@ -467,7 +476,6 @@ class EditDialog(QDialog):
         if state == Qt.Checked:
             entry.clear()
 
-
     def select_photo(self, entry):
         file_name, _ = QFileDialog.getOpenFileName(self, "Fotoğraf Seç", "", "Resim Dosyaları (*.png *.jpg *.jpeg)")
         if file_name:
@@ -478,11 +486,13 @@ class EditDialog(QDialog):
             destination_path = os.path.join(self.parent.config["photos_dir"], new_file_name)
             try:
                 shutil.copy2(file_name, destination_path)
-                entry.setText(new_file_name)  # Yalnızca dosya adını sakla
-                logging.info(f"Fotoğraf {destination_path} olarak kopyalandı.")
+                entry.setText(new_file_name)  # Doğru entry'ye yazıldığından emin olma
+                logging.info(f"Fotoğraf {destination_path} kopyalandı ve 'Demirbaş Fotoğrafı' alanına yazıldı: {new_file_name}")
             except IOError as e:
                 logging.error(f"Fotoğraf kopyalanamadı: {str(e)}")
                 QMessageBox.critical(self, "Hata", f"Fotoğraf kopyalanamadı: {str(e)}")
+        else:
+            logging.info("Fotoğraf seçimi iptal edildi.")
 
     def get_data(self):
         data = []
@@ -504,11 +514,13 @@ class EditDialog(QDialog):
                         value = ""  # Fotoğraf yoksa boş
                     else:
                         value = self.entries[header].text() or ""  # Yeni seçilen fotoğraf ya da boş
+                    logging.info(f"Fotoğraf alanı değeri: {value}")
                 else:
                     value = self.entries[header].text()
                 data.append(value)
             else:
                 data.append("")
+            logging.info(f"Header: {header}, Değer: {data[-1]}")
         return data
 
 class InventoryApp(QMainWindow):

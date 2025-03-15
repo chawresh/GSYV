@@ -2,6 +2,7 @@
 pyinstaller -F -w --add-data "/Users/chawresh/Desktop/files:files" --icon "/Users/chawresh/Desktop/logo.icns" --name "GSYV" GSYV.py
 """
 
+
 import sys
 import sqlite3
 import json
@@ -61,7 +62,7 @@ logging.basicConfig(filename=os.path.join(BASE_DIR, 'inventory.log'),
 # Sabitler
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 DB_FILE = os.path.join(BASE_DIR, "inventory.db")
-LOGO_FILE = "C:\GSYV-main\logo.png"  # Statik dosya, paket içinde
+LOGO_FILE = "C:/GSYV-main/logo.png"  # Statik dosya, paket içinde
 
 # Türkçe çeviriler
 TRANSLATIONS = {
@@ -481,7 +482,7 @@ class EditDialog(QDialog):
             new_file_name = os.path.join(self.parent.config["photos_dir"], f"photo_{timestamp}_{unique_id}{extension}")
             try:
                 shutil.copy2(file_name, new_file_name)
-                entry.setText(os.path.basename(new_file_name))
+                entry.setText(os.path.basename(new_file_name))  # Yalnızca dosya adını ayarla
                 logging.info(f"Fotoğraf {new_file_name} olarak kopyalandı.")
             except IOError as e:
                 logging.error(f"Fotoğraf kopyalanamadı: {str(e)}")
@@ -502,8 +503,11 @@ class EditDialog(QDialog):
                     value = self.entries[header].toPlainText()
                 elif header == "Bağışçı" and f"{header}_check" in self.entries and self.entries[f"{header}_check"].isChecked():
                     value = ""
-                elif header == TRANSLATIONS["photo"] and f"{header}_check" in self.entries and self.entries[f"{header}_check"].isChecked():
-                    value = ""
+                elif header == TRANSLATIONS["photo"]:
+                    if f"{header}_check" in self.entries and self.entries[f"{header}_check"].isChecked():
+                        value = ""
+                    else:
+                        value = os.path.basename(self.entries[header].text())  # Yalnızca dosya adını al
                 else:
                     value = self.entries[header].text()
                 data.append(value)
@@ -1306,7 +1310,7 @@ class InventoryApp(QMainWindow):
         container_layout.setSpacing(15)
 
         # PDF'teki gibi dinamik logo ekleme
-        logo_path = "C:\GSYV-main\logo.png"
+        logo_path = "C:/GSYV-main/logo.png"
         if os.path.exists(logo_path):
             logo_label = QLabel()
             pixmap = QPixmap(logo_path)
@@ -1751,6 +1755,8 @@ class InventoryApp(QMainWindow):
             region_idx = headers.index(TRANSLATIONS["region"])
             floor_idx = headers.index(TRANSLATIONS["floor"])
             code_idx = headers.index("Demirbaş Kodu")
+            photo_idx = headers.index(TRANSLATIONS["photo"])
+            desc_idx = headers.index(TRANSLATIONS["description"])
             
             new_group = new_data[group_idx]
             new_region = new_data[region_idx]
@@ -1760,6 +1766,16 @@ class InventoryApp(QMainWindow):
             new_code = self.generate_inventory_code(new_group, new_region, new_floor)
             new_data[code_idx] = new_code
             
+            # Fotoğraf yolunun description'a eklenmesini engelle
+            if new_data[photo_idx] and os.path.isabs(new_data[photo_idx]):
+                new_data[photo_idx] = os.path.basename(new_data[photo_idx])
+                logging.warning(f"Tam yol tespit edildi ve dosya adına çevrildi: {new_data[photo_idx]}")
+
+            # Description alanının bozulmadığından emin ol
+            if new_data[desc_idx] and new_data[photo_idx] in new_data[desc_idx]:
+                logging.warning(f"Description alanında fotoğraf yolu tespit edildi ve temizlendi: {new_data[desc_idx]}")
+                new_data[desc_idx] = new_data[desc_idx].replace(new_data[photo_idx], "").strip()
+
             row_id = row_data[0].data(Qt.UserRole)
             cursor = self.conn.cursor()
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2001,7 +2017,7 @@ class InventoryApp(QMainWindow):
 
                 # Font kontrolü ve Türkçe karakter desteği
                 if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames():
-                    font_path = "C:\GSYV-main\DejaVuSans.ttf"
+                    font_path = "C:/GSYV-main/DejaVuSans.ttf"
                     if os.path.exists(font_path):
                         pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
                         logging.info(f"DejaVuSans.ttf yüklendi: {font_path}")
@@ -2076,7 +2092,7 @@ class InventoryApp(QMainWindow):
                 elements.append(date)
 
                 # Logo (dinamik yol: files_dir içinden)
-                logo_path = "C:\GSYV-main\logo.png"
+                logo_path = "C:/GSYV-main/logo.png"
                 if os.path.exists(logo_path):
                     logo = Image(logo_path, width=2 * cm, height=2 * cm)
                     logo.hAlign = 'CENTER'
@@ -2142,14 +2158,143 @@ class InventoryApp(QMainWindow):
         if not selected:
             QMessageBox.warning(self, "Hata", TRANSLATIONS["error_select_row"])
             return
-        row = self.archive_table.currentRow()
-        row_id = self.archive_table.item(row, 0).data(Qt.UserRole)
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT data FROM archive WHERE id = ?", (row_id,))
-        data = json.loads(cursor.fetchone()[0])
-        headers = self.get_column_headers()
-        details = "\n".join([f"{header}: {value}" for header, value in zip(headers, data)])
-        QMessageBox.information(self, TRANSLATIONS["details_title"], details)
+
+        try:
+            headers = self.get_column_headers()
+            if not headers:
+                QMessageBox.warning(self, "Hata", "Sütun başlıkları alınamadı!")
+                return
+
+            cursor = self.conn.cursor()
+            row = self.archive_table.currentRow()
+            row_id = self.archive_table.item(row, 0).data(Qt.UserRole)
+            cursor.execute("SELECT data FROM archive WHERE id = ?", (row_id,))
+            full_data = json.loads(cursor.fetchone()[0])
+            data = full_data if len(full_data) == len(headers) else full_data + [""] * (len(headers) - len(full_data))
+
+            dialog = QDialog(self)
+            dialog.setWindowTitle(TRANSLATIONS["details_title"])
+            dialog.setMinimumSize(800, 600)
+            layout = QVBoxLayout(dialog)
+
+            # Fotoğrafı en üste ekle
+            photo_idx = headers.index(TRANSLATIONS["photo"]) if TRANSLATIONS["photo"] in headers else -1
+            if photo_idx != -1 and data[photo_idx]:
+                # photos_dir ile birleştir
+                photo_path = os.path.join(self.config["photos_dir"], data[photo_idx])
+                photo_label = QLabel("Demirbaş Fotoğrafı:")
+                photo_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+                photo_widget = QLabel()
+
+                if os.path.exists(photo_path):
+                    pixmap = QPixmap(photo_path)
+                    if not pixmap.isNull():
+                        pixmap = pixmap.scaled(200, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                        photo_widget.setPixmap(pixmap)
+                    else:
+                        photo_widget.setText(f"Fotoğraf yüklenemedi: {photo_path}")
+                        logging.warning(f"Fotoğraf yüklenemedi (QPixmap hatası): {photo_path}")
+                else:
+                    photo_widget.setText(f"Dosya bulunamadı: {photo_path}")
+                    logging.warning(f"Fotoğraf dosyası bulunamadı: {photo_path}")
+
+                layout.addWidget(photo_label)
+                layout.addWidget(photo_widget)
+                layout.addSpacing(10)
+            else:
+                photo_label = QLabel("Demirbaş Fotoğrafı: Yok")
+                photo_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+                layout.addWidget(photo_label)
+                layout.addSpacing(10)
+
+            # Sekmeli yapı
+            tabs = QTabWidget()
+            card_tab = QWidget()
+            invoice_tab = QWidget()
+            service_tab = QWidget()
+
+            card_layout = QFormLayout(card_tab)
+            invoice_layout = QFormLayout(invoice_tab)
+            service_layout = QFormLayout(service_tab)
+
+            cursor.execute("SELECT column_name, section FROM metadata ORDER BY column_order")
+            metadata = cursor.fetchall()
+            if not metadata:
+                logging.warning("Metadata tablosu boş, varsayılan bölüm kullanılıyor.")
+                metadata = [(header, TRANSLATIONS["card_info"]) for header in headers]
+
+            card_count = 0
+            invoice_count = 0
+            service_count = 0
+
+            for i, (header, value) in enumerate(zip(headers, data)):
+                if header == TRANSLATIONS["photo"]:  # Fotoğrafı zaten gösterdik, atla
+                    continue
+                section = next((m[1] for m in metadata if m[0] == header), TRANSLATIONS["card_info"])
+                label = QLabel(f"{header}:")
+                label.setStyleSheet("font-weight: bold; font-size: 14px;")
+
+                if header in ["Özellikler", TRANSLATIONS["description"]]:
+                    value_widget = QTextEdit(value)
+                    value_widget.setReadOnly(True)
+                    value_widget.setStyleSheet("font-size: 14px; margin-left: 10px; padding: 5px; border: 1px solid #ccc;")
+                    value_widget.setMinimumHeight(100 if header == "Özellikler" else 75)
+                    value_widget.setWordWrapMode(QTextOption.WordWrap)
+                    value_widget.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+                else:
+                    value_widget = QLabel(value if value else "Bilgi Yok")
+                    value_widget.setStyleSheet("font-size: 14px; margin-left: 10px;")
+                    value_widget.setWordWrap(True)
+
+                if section == TRANSLATIONS["card_info"]:
+                    card_layout.addRow(label, value_widget)
+                    card_count += 1
+                elif section == TRANSLATIONS["invoice_info"]:
+                    invoice_layout.addRow(label, value_widget)
+                    invoice_count += 1
+                elif section == TRANSLATIONS["service_info"]:
+                    service_layout.addRow(label, value_widget)
+                    service_count += 1
+
+            tabs.addTab(card_tab, f"{TRANSLATIONS['card_info']} ({card_count})")
+            tabs.addTab(invoice_tab, f"{TRANSLATIONS['invoice_info']} ({invoice_count})")
+            tabs.addTab(service_tab, f"{TRANSLATIONS['service_info']} ({service_count})")
+            layout.addWidget(tabs)
+
+            # Demirbaş kodu çözümleme
+            code_idx = headers.index("Demirbaş Kodu") if "Demirbaş Kodu" in headers else -1
+            if code_idx != -1 and code_idx < len(data):
+                code = data[code_idx]
+                decoded_info = self.decode_inventory_code(code)
+                code_label = QLabel(f"Kod Çözümleme: {decoded_info}")
+                code_label.setStyleSheet("font-weight: bold; color: #D32F2F; font-size: 14px; margin-top: 10px;")
+                layout.addWidget(code_label)
+
+            # Düğmeler
+            button_layout = QHBoxLayout()
+            copy_button = QPushButton("Detayları Kopyala")
+            copy_button.setIcon(qta.icon('fa5s.copy', color='#FFC107'))
+            copy_button.clicked.connect(lambda: QApplication.clipboard().setText(
+                "\n".join([f"{header}: {value}" for header, value in zip(headers, data)])
+            ))
+            button_layout.addWidget(copy_button)
+
+            pdf_button = QPushButton("PDF Olarak Kaydet")
+            pdf_button.setIcon(qta.icon('fa5s.file-pdf', color='#FFC107'))
+            pdf_button.clicked.connect(lambda: self.save_details_as_pdf(headers, data))
+            button_layout.addWidget(pdf_button)
+
+            close_button = QPushButton(TRANSLATIONS["close_item"])
+            close_button.setIcon(qta.icon('fa5s.times', color='#D32F2F'))
+            close_button.clicked.connect(dialog.accept)
+            button_layout.addWidget(close_button)
+
+            layout.addLayout(button_layout)
+            dialog.exec_()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"Detaylar gösterilirken hata oluştu: {str(e)}")
+            logging.error(f"view_archive_item hatası: {str(e)}")
 
     def restore_archive_item(self):
         selected = self.archive_table.selectedItems()
@@ -2291,16 +2436,16 @@ class InventoryApp(QMainWindow):
                     # Font kontrolü ve Türkçe karakter desteği
                     if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames():
                         #font_path = resource_path(os.path.join("files", "DejaVuSans.ttf"))
-                        font_path = "C:\GSYV-main\DejaVuSans.ttf"
+                        font_path = "C:/GSYV-main/DejaVuSans.ttf"
                         if os.path.exists(font_path):
                             #pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
                             #logging.info(f"DejaVuSans.ttf yüklendi: {font_path}")
-                            pdfmetrics.registerFont(TTFont("DejaVuSans", "C:\GSYV-main\DejaVuSans.ttf"))
-                            logging.info(f"DejaVuSans.ttf yüklendi", "C:\GSYV-main\DejaVuSans.ttf")
+                            pdfmetrics.registerFont(TTFont("DejaVuSans", "C:/GSYV-main/DejaVuSans.ttf"))
+                            logging.info(f"DejaVuSans.ttf yüklendi", "C:/GSYV-main/DejaVuSans.ttf")
                         else:
                             logging.warning("DejaVuSans.ttf bulunamadı, Helvetica kullanılıyor.")
                             #pdfmetrics.registerFont(TTFont("Helvetica", "C:\GSYV-main\Helvetica.ttf"))  # Yedek font
-                            pdfmetrics.registerFont(TTFont("Helvetica", "C:\GSYV-main\Helvetica.ttf"))  # Yedek font
+                            pdfmetrics.registerFont(TTFont("Helvetica", "C:/GSYV-main/Helvetica.ttf"))  # Yedek font
                             QMessageBox.warning(self, "Uyarı", "Türkçe karakter desteği için DejaVuSans.ttf bulunamadı.")
 
                     # Başlık
@@ -3055,6 +3200,9 @@ if __name__ == "__main__":
     window = InventoryApp()
     window.show()
     sys.exit(app.exec_())
+
+
+
 
 
 

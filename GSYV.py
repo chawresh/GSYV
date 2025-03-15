@@ -511,7 +511,7 @@ class EditDialog(QDialog):
             else:
                 data.append("")
         return data
-
+        
 class InventoryApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1762,7 +1762,6 @@ def open_edit_dialog(self):
         region_idx = headers.index(TRANSLATIONS["region"])
         floor_idx = headers.index(TRANSLATIONS["floor"])
         code_idx = headers.index("Demirbaş Kodu")
-        photo_idx = headers.index(TRANSLATIONS["photo"])
         
         new_group = new_data[group_idx]
         new_region = new_data[region_idx]
@@ -1772,36 +1771,21 @@ def open_edit_dialog(self):
         new_code = self.generate_inventory_code(new_group, new_region, new_floor)
         new_data[code_idx] = new_code
         
-        # Eski fotoğrafı kontrol et ve gerekirse temizle
         row_id = row_data[0].data(Qt.UserRole)
         cursor = self.conn.cursor()
-        cursor.execute("SELECT data FROM inventory WHERE id = ?", (row_id,))
-        old_data = json.loads(cursor.fetchone()[0])
-        old_photo = old_data[photo_idx] if photo_idx < len(old_data) else ""
-        new_photo = new_data[photo_idx]
-        
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
             # Eski kaydı sil
             cursor.execute("DELETE FROM inventory WHERE id = ?", (row_id,))
             
-            # Yeni kaydı ekle
+            # Yeni kaydı ekle (add_item gibi)
             cursor.execute("INSERT INTO inventory (data, timestamp) VALUES (?, ?)",
                           (json.dumps(new_data), timestamp))
             
             self.conn.commit()
             self.load_data_from_db()
-            
-            # Eski fotoğraf dosyası yeni fotoğraftan farklıysa ve hala varsa, sil (isteğe bağlı)
-            if old_photo and old_photo != new_photo and os.path.exists(os.path.join(self.config["photos_dir"], old_photo)):
-                try:
-                    os.remove(os.path.join(self.config["photos_dir"], old_photo))
-                    logging.info(f"Eski fotoğraf silindi: {old_photo}")
-                except OSError as e:
-                    logging.error(f"Eski fotoğraf silinemedi: {str(e)}")
-            
             QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_updated"])
-            logging.info(f"Envanter güncellendi: Eski ID {row_id}, Yeni Kod: {new_code}, Fotoğraf: {new_photo}")
+            logging.info(f"Envanter güncellendi: Eski ID {row_id}, Yeni Kod: {new_code}")
         except sqlite3.Error as e:
             logging.error(f"Veritabanı güncelleme hatası: {str(e)}")
             QMessageBox.critical(self, "Hata", f"Veritabanı güncellenemedi: {str(e)}")

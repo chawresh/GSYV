@@ -476,7 +476,7 @@ class EditDialog(QDialog):
             new_file_name = os.path.join(self.parent.config["photos_dir"], f"photo_{timestamp}_{unique_id}{extension}")
             try:
                 shutil.copy2(file_name, new_file_name)
-                entry.setText(os.path.basename(new_file_name))
+                entry.setText(os.path.basename(new_file_name))  # Yalnızca dosya adını sakla
                 logging.info(f"Fotoğraf {new_file_name} olarak kopyalandı.")
             except IOError as e:
                 logging.error(f"Fotoğraf kopyalanamadı: {str(e)}")
@@ -497,8 +497,14 @@ class EditDialog(QDialog):
                     value = self.entries[header].toPlainText()
                 elif header == "Bağışçı" and f"{header}_check" in self.entries and self.entries[f"{header}_check"].isChecked():
                     value = ""
-                elif header == TRANSLATIONS["photo"] and f"{header}_check" in self.entries and self.entries[f"{header}_check"].isChecked():
-                    value = ""
+                elif header == TRANSLATIONS["photo"]:
+                    # Fotoğraf için özel kontrol
+                    if f"{header}_check" in self.entries and self.entries[f"{header}_check"].isChecked():
+                        value = ""  # Fotoğraf yoksa boş
+                    else:
+                        value = self.entries[header].text()  # Yeni seçilen fotoğrafın dosya adı
+                        if not value:  # Eğer hala boşsa, eski değeri koruma
+                            value = self.row_data[self.headers.index(header)]
                 else:
                     value = self.entries[header].text()
                 data.append(value)
@@ -1739,50 +1745,66 @@ class InventoryApp(QMainWindow):
         if "Demirbaş Kodu" in self.card_entries:
             self.card_entries["Demirbaş Kodu"].setText("Otomatik")
 
-    def open_edit_dialog(self):
-        selected = self.table.selectedItems()
-        if not selected:
-            QMessageBox.warning(self, "Hata", TRANSLATIONS["error_select_row"])
-            return
-        row = self.table.currentRow()
-        row_data = [self.table.item(row, col) for col in range(self.table.columnCount())]
-        dialog = EditDialog(self, row_data, self.get_column_headers())
-        if dialog.exec_() == QDialog.Accepted:
-            new_data = dialog.get_data()
-            headers = self.get_column_headers()
+def open_edit_dialog(self):
+    selected = self.table.selectedItems()
+    if not selected:
+        QMessageBox.warning(self, "Hata", TRANSLATIONS["error_select_row"])
+        return
+    row = self.table.currentRow()
+    row_data = [self.table.item(row, col) for col in range(self.table.columnCount())]
+    dialog = EditDialog(self, row_data, self.get_column_headers())
+    if dialog.exec_() == QDialog.Accepted:
+        new_data = dialog.get_data()
+        headers = self.get_column_headers()
+        
+        # Grup, bölge ve kat değiştiyse kodu güncelle
+        group_idx = headers.index(TRANSLATIONS["group_name"])
+        region_idx = headers.index(TRANSLATIONS["region"])
+        floor_idx = headers.index(TRANSLATIONS["floor"])
+        code_idx = headers.index("Demirbaş Kodu")
+        photo_idx = headers.index(TRANSLATIONS["photo"])
+        
+        new_group = new_data[group_idx]
+        new_region = new_data[region_idx]
+        new_floor = new_data[floor_idx]
+        
+        # Yeni kodu oluştur
+        new_code = self.generate_inventory_code(new_group, new_region, new_floor)
+        new_data[code_idx] = new_code
+        
+        # Eski fotoğrafı kontrol et ve gerekirse temizle
+        row_id = row_data[0].data(Qt.UserRole)
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT data FROM inventory WHERE id = ?", (row_id,))
+        old_data = json.loads(cursor.fetchone()[0])
+        old_photo = old_data[photo_idx] if photo_idx < len(old_data) else ""
+        new_photo = new_data[photo_idx]
+        
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            # Eski kaydı sil
+            cursor.execute("DELETE FROM inventory WHERE id = ?", (row_id,))
             
-            # Grup, bölge ve kat değiştiyse kodu güncelle
-            group_idx = headers.index(TRANSLATIONS["group_name"])
-            region_idx = headers.index(TRANSLATIONS["region"])
-            floor_idx = headers.index(TRANSLATIONS["floor"])
-            code_idx = headers.index("Demirbaş Kodu")
+            # Yeni kaydı ekle
+            cursor.execute("INSERT INTO inventory (data, timestamp) VALUES (?, ?)",
+                          (json.dumps(new_data), timestamp))
             
-            new_group = new_data[group_idx]
-            new_region = new_data[region_idx]
-            new_floor = new_data[floor_idx]
+            self.conn.commit()
+            self.load_data_from_db()
             
-            # Yeni kodu oluştur
-            new_code = self.generate_inventory_code(new_group, new_region, new_floor)
-            new_data[code_idx] = new_code
+            # Eski fotoğraf dosyası yeni fotoğraftan farklıysa ve hala varsa, sil (isteğe bağlı)
+            if old_photo and old_photo != new_photo and os.path.exists(os.path.join(self.config["photos_dir"], old_photo)):
+                try:
+                    os.remove(os.path.join(self.config["photos_dir"], old_photo))
+                    logging.info(f"Eski fotoğraf silindi: {old_photo}")
+                except OSError as e:
+                    logging.error(f"Eski fotoğraf silinemedi: {str(e)}")
             
-            row_id = row_data[0].data(Qt.UserRole)
-            cursor = self.conn.cursor()
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            try:
-                # Eski kaydı sil
-                cursor.execute("DELETE FROM inventory WHERE id = ?", (row_id,))
-                
-                # Yeni kaydı ekle (add_item gibi)
-                cursor.execute("INSERT INTO inventory (data, timestamp) VALUES (?, ?)",
-                              (json.dumps(new_data), timestamp))
-                
-                self.conn.commit()
-                self.load_data_from_db()
-                QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_updated"])
-                logging.info(f"Envanter güncellendi: Eski ID {row_id}, Yeni Kod: {new_code}")
-            except sqlite3.Error as e:
-                logging.error(f"Veritabanı güncelleme hatası: {str(e)}")
-                QMessageBox.critical(self, "Hata", f"Veritabanı güncellenemedi: {str(e)}")
+            QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_updated"])
+            logging.info(f"Envanter güncellendi: Eski ID {row_id}, Yeni Kod: {new_code}, Fotoğraf: {new_photo}")
+        except sqlite3.Error as e:
+            logging.error(f"Veritabanı güncelleme hatası: {str(e)}")
+            QMessageBox.critical(self, "Hata", f"Veritabanı güncellenemedi: {str(e)}")
 
     def archive_item_with_confirmation(self):
         selected = self.table.selectedItems()

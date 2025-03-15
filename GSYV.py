@@ -511,7 +511,7 @@ class EditDialog(QDialog):
             else:
                 data.append("")
         return data
-        
+
 class InventoryApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -521,6 +521,7 @@ class InventoryApp(QMainWindow):
         dejavu_font_path = resource_path("files/DejaVuSans.ttf")
         helvetica_font_path = resource_path("files/Helvetica.ttf")
 
+        # Font kayıt işlemleri
         try:
             if os.path.exists(dejavu_font_path):
                 pdfmetrics.registerFont(TTFont("DejaVuSans", dejavu_font_path))
@@ -533,11 +534,9 @@ class InventoryApp(QMainWindow):
                 logging.info(f"Helvetica.ttf yüklendi: {helvetica_font_path}")
                 plt.rcParams['font.family'] = 'Helvetica'
             else:
-                # Font dosyaları bulunamazsa, standart bir yedek font kullan
-                self.default_font = "Times"  # reportlab için standart serif font
+                self.default_font = "Times"
                 logging.warning("DejaVuSans.ttf ve Helvetica.ttf bulunamadı, standart 'Times' fontu kullanılacak.")
-                plt.rcParams['font.family'] = 'sans-serif'  # matplotlib için genel sans-serif font ailesi
-                # Times, reportlab tarafından varsayılan olarak tanınır, ek kayıt gerekmez
+                plt.rcParams['font.family'] = 'sans-serif'
         except Exception as e:
             logging.error(f"Font kaydı hatası: {str(e)}")
             raise
@@ -545,9 +544,10 @@ class InventoryApp(QMainWindow):
         self.setWindowTitle(TRANSLATIONS["title"])
         self.setGeometry(100, 100, 1200, 700)
 
-        self.load_config()  # Config dosyası burada yükleniyor
+        self.load_config()  # Config dosyası yükleniyor
         self.copy_initial_files()
 
+        # Veritabanı bağlantısı ve oluşturma
         self.db_exists = os.path.exists(DB_FILE)
         if self.db_exists:
             try:
@@ -566,8 +566,11 @@ class InventoryApp(QMainWindow):
                 logging.error(f"Veritabanı oluşturulamadı: {str(e)}")
                 QMessageBox.critical(self, "Hata", f"Veritabanı oluşturulamadı: {str(e)}")
                 sys.exit(1)
-        self.create_or_update_tables()
 
+        # Veritabanı tablolarını oluştur veya güncelle
+        self.create_or_update_tables()  # Bu satırın çalışması için metod tanımlı olmalı
+
+        # Diğer başlatma işlemleri
         self.groups = self.load_json_data(self.config["combobox_files"][TRANSLATIONS["group_name"]], DEFAULT_GROUPS)
         self.regions = self.load_json_data(self.config["combobox_files"][TRANSLATIONS["region"]], DEFAULT_REGIONS)
         self.floors = self.load_json_data(self.config["combobox_files"][TRANSLATIONS["floor"]], DEFAULT_FLOORS)
@@ -610,6 +613,53 @@ class InventoryApp(QMainWindow):
         self.autosave_timer.start(self.config["autosave_interval"] * 60000)
 
         self.change_font_size(self.config["font_size"])
+
+    def create_or_update_tables(self):
+        cursor = self.conn.cursor()
+        cursor.execute('''CREATE TABLE IF NOT EXISTS inventory (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            data TEXT NOT NULL,
+                            timestamp TEXT NOT NULL)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS archive (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            data TEXT NOT NULL,
+                            timestamp TEXT NOT NULL)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS metadata (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            column_name TEXT NOT NULL,
+                            section TEXT NOT NULL,
+                            type TEXT NOT NULL,
+                            combobox_file TEXT,
+                            column_order INTEGER NOT NULL)''')
+
+        cursor.execute("SELECT column_name FROM metadata")
+        existing_columns = [row[0] for row in cursor.fetchall()]
+        default_columns = [
+            ("Demirbaş Kodu", TRANSLATIONS["card_info"], "Metin", None, 1),
+            (TRANSLATIONS["group_name"], TRANSLATIONS["card_info"], "ComboBox", self.config["combobox_files"][TRANSLATIONS["group_name"]], 2),
+            (TRANSLATIONS["item_name"], TRANSLATIONS["card_info"], "Metin", None, 3),
+            (TRANSLATIONS["region"], TRANSLATIONS["card_info"], "ComboBox", self.config["combobox_files"][TRANSLATIONS["region"]], 4),
+            (TRANSLATIONS["floor"], TRANSLATIONS["card_info"], "ComboBox", self.config["combobox_files"][TRANSLATIONS["floor"]], 5),
+            (TRANSLATIONS["quantity"], TRANSLATIONS["card_info"], "Metin", None, 6),
+            ("Edinim Tarihi", TRANSLATIONS["card_info"], "Tarih", None, 7),
+            (TRANSLATIONS["photo"], TRANSLATIONS["card_info"], "Metin", None, 8),
+            (TRANSLATIONS["brand"], TRANSLATIONS["invoice_info"], "Metin", None, 9),
+            (TRANSLATIONS["model"], TRANSLATIONS["invoice_info"], "Metin", None, 10),
+            (TRANSLATIONS["invoice_no"], TRANSLATIONS["invoice_info"], "Metin", None, 11),
+            ("Bağışçı", TRANSLATIONS["invoice_info"], "Metin", None, 12),
+            (TRANSLATIONS["company"], TRANSLATIONS["invoice_info"], "Metin", None, 13),
+            ("Özellikler", TRANSLATIONS["invoice_info"], "Metin", None, 14),
+            (TRANSLATIONS["status"], TRANSLATIONS["service_info"], "Metin", None, 15),
+            (TRANSLATIONS["warranty_period"], TRANSLATIONS["service_info"], "Tarih", None, 16),
+            (TRANSLATIONS["description"], TRANSLATIONS["service_info"], "Metin", None, 17)
+        ]
+
+        for column_name, section, param_type, combobox_file, order in default_columns:
+            if column_name not in existing_columns:
+                cursor.execute("INSERT INTO metadata (column_name, section, type, combobox_file, column_order) VALUES (?, ?, ?, ?, ?)",
+                               (column_name, section, param_type, combobox_file, order))
+        self.conn.commit()
+        logging.info("Veritabanı tabloları oluşturuldu veya güncellendi.")
 
     def copy_initial_files(self):
         """ Paket içindeki başlangıç dosyalarını config'deki files_dir'e kopyalar """

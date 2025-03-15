@@ -343,7 +343,6 @@ class EditDialog(QDialog):
         self.parent = parent
         self.headers = headers or []
         self.entries = {}
-        self.old_photo_path = None  # Eski fotoğraf yolunu sakla
 
         cursor = self.parent.conn.cursor()
         if row_data:
@@ -355,10 +354,12 @@ class EditDialog(QDialog):
                 full_data = row_data
             else:
                 raise ValueError("EditDialog: row_data beklenmeyen bir türde.")
-            self.row_data = full_data if len(full_data) >= len(self.headers) else full_data + [""] * (len(self.headers) - len(full_data))
-            photo_idx = self.headers.index(TRANSLATIONS["photo"]) if TRANSLATIONS["photo"] in self.headers else -1
-            if photo_idx != -1 and self.row_data[photo_idx]:
-                self.old_photo_path = os.path.join(self.parent.config["photos_dir"], self.row_data[photo_idx])
+        else:
+            full_data = [""] * len(self.headers)
+
+        self.row_data = full_data if len(full_data) >= len(self.headers) else full_data + [""] * (len(self.headers) - len(full_data))
+        if len(self.row_data) > len(self.headers):
+            self.row_data = self.row_data[:len(self.headers)]
 
         layout = QFormLayout(self)
         cursor.execute("SELECT column_name, type, combobox_file FROM metadata ORDER BY column_order")
@@ -477,11 +478,6 @@ class EditDialog(QDialog):
                 shutil.copy2(file_name, new_file_name)
                 entry.setText(os.path.basename(new_file_name))
                 logging.info(f"Fotoğraf {new_file_name} olarak kopyalandı.")
-                # Eski fotoğrafı sil (eğer varsa ve yenisiyle aynı değilse)
-                if self.old_photo_path and os.path.exists(self.old_photo_path) and self.old_photo_path != new_file_name:
-                    os.remove(self.old_photo_path)
-                    logging.info(f"Eski fotoğraf silindi: {self.old_photo_path}")
-                self.old_photo_path = new_file_name
             except IOError as e:
                 logging.error(f"Fotoğraf kopyalanamadı: {str(e)}")
                 QMessageBox.critical(self, "Hata", f"Fotoğraf kopyalanamadı: {str(e)}")
@@ -1755,41 +1751,35 @@ class InventoryApp(QMainWindow):
             new_data = dialog.get_data()
             headers = self.get_column_headers()
             
-            # İndeksleri tanımla
+            # Grup, bölge ve kat değiştiyse kodu güncelle
             group_idx = headers.index(TRANSLATIONS["group_name"])
             region_idx = headers.index(TRANSLATIONS["region"])
             floor_idx = headers.index(TRANSLATIONS["floor"])
             code_idx = headers.index("Demirbaş Kodu")
-            photo_idx = headers.index(TRANSLATIONS["photo"])
-            desc_idx = headers.index(TRANSLATIONS["description"]) if TRANSLATIONS["description"] in headers else -1
             
-            # Yeni kodu oluştur
             new_group = new_data[group_idx]
             new_region = new_data[region_idx]
             new_floor = new_data[floor_idx]
+            
+            # Yeni kodu oluştur
             new_code = self.generate_inventory_code(new_group, new_region, new_floor)
             new_data[code_idx] = new_code
             
-            # Fotoğraf yolunu yalnızca dosya adıyla sakla
-            if new_data[photo_idx] and os.path.isabs(new_data[photo_idx]):
-                new_data[photo_idx] = os.path.basename(new_data[photo_idx])
-                logging.warning(f"Tam yol tespit edildi ve dosya adına çevrildi: {new_data[photo_idx]}")
-
-            # Açıklama alanına fotoğraf yolunun yazılmadığından emin ol
-            if desc_idx != -1 and new_data[desc_idx] == new_data[photo_idx] and "photo_" in new_data[desc_idx]:
-                logging.warning(f"Açıklama alanına fotoğraf yolu yazılmış olabilir, düzeltiliyor: {new_data[desc_idx]}")
-                new_data[desc_idx] = ""  # Yanlışlıkla yazılmışsa temizle
-
             row_id = row_data[0].data(Qt.UserRole)
             cursor = self.conn.cursor()
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             try:
-                cursor.execute("UPDATE inventory SET data = ?, timestamp = ? WHERE id = ?",
-                               (json.dumps(new_data), timestamp, row_id))
+                # Eski kaydı sil
+                cursor.execute("DELETE FROM inventory WHERE id = ?", (row_id,))
+                
+                # Yeni kaydı ekle (add_item gibi)
+                cursor.execute("INSERT INTO inventory (data, timestamp) VALUES (?, ?)",
+                              (json.dumps(new_data), timestamp))
+                
                 self.conn.commit()
                 self.load_data_from_db()
                 QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_updated"])
-                logging.info(f"Envanter güncellendi: ID {row_id}, Yeni Kod: {new_code}, Yeni Fotoğraf: {new_data[photo_idx]}")
+                logging.info(f"Envanter güncellendi: Eski ID {row_id}, Yeni Kod: {new_code}")
             except sqlite3.Error as e:
                 logging.error(f"Veritabanı güncelleme hatası: {str(e)}")
                 QMessageBox.critical(self, "Hata", f"Veritabanı güncellenemedi: {str(e)}")
@@ -1876,6 +1866,10 @@ class InventoryApp(QMainWindow):
 
         try:
             headers = self.get_column_headers()
+            if not headers:
+                QMessageBox.warning(self, "Hata", "Sütun başlıkları alınamadı!")
+                return
+
             cursor = self.conn.cursor()
             row_id = self.table.item(selected, 0).data(Qt.UserRole)
             cursor.execute("SELECT data FROM inventory WHERE id = ?", (row_id,))
@@ -1887,9 +1881,10 @@ class InventoryApp(QMainWindow):
             dialog.setMinimumSize(800, 600)
             layout = QVBoxLayout(dialog)
 
-            # Fotoğrafı göster
+            # Fotoğrafı en üste ekle
             photo_idx = headers.index(TRANSLATIONS["photo"]) if TRANSLATIONS["photo"] in headers else -1
             if photo_idx != -1 and data[photo_idx]:
+                # photos_dir ile birleştir
                 photo_path = os.path.join(self.config["photos_dir"], data[photo_idx])
                 photo_label = QLabel("Demirbaş Fotoğrafı:")
                 photo_label.setStyleSheet("font-weight: bold; font-size: 14px;")

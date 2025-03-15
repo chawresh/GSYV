@@ -467,6 +467,8 @@ class EditDialog(QDialog):
         if state == Qt.Checked:
             entry.clear()
 
+
+
     def select_photo(self, entry):
         file_name, _ = QFileDialog.getOpenFileName(self, "Fotoğraf Seç", "", "Resim Dosyaları (*.png *.jpg *.jpeg)")
         if file_name:
@@ -521,7 +523,6 @@ class InventoryApp(QMainWindow):
         dejavu_font_path = resource_path("files/DejaVuSans.ttf")
         helvetica_font_path = resource_path("files/Helvetica.ttf")
 
-        # Font kayıt işlemleri
         try:
             if os.path.exists(dejavu_font_path):
                 pdfmetrics.registerFont(TTFont("DejaVuSans", dejavu_font_path))
@@ -534,9 +535,11 @@ class InventoryApp(QMainWindow):
                 logging.info(f"Helvetica.ttf yüklendi: {helvetica_font_path}")
                 plt.rcParams['font.family'] = 'Helvetica'
             else:
-                self.default_font = "Times"
+                # Font dosyaları bulunamazsa, standart bir yedek font kullan
+                self.default_font = "Times"  # reportlab için standart serif font
                 logging.warning("DejaVuSans.ttf ve Helvetica.ttf bulunamadı, standart 'Times' fontu kullanılacak.")
-                plt.rcParams['font.family'] = 'sans-serif'
+                plt.rcParams['font.family'] = 'sans-serif'  # matplotlib için genel sans-serif font ailesi
+                # Times, reportlab tarafından varsayılan olarak tanınır, ek kayıt gerekmez
         except Exception as e:
             logging.error(f"Font kaydı hatası: {str(e)}")
             raise
@@ -544,10 +547,9 @@ class InventoryApp(QMainWindow):
         self.setWindowTitle(TRANSLATIONS["title"])
         self.setGeometry(100, 100, 1200, 700)
 
-        self.load_config()  # Config dosyası yükleniyor
+        self.load_config()  # Config dosyası burada yükleniyor
         self.copy_initial_files()
 
-        # Veritabanı bağlantısı ve oluşturma
         self.db_exists = os.path.exists(DB_FILE)
         if self.db_exists:
             try:
@@ -566,11 +568,8 @@ class InventoryApp(QMainWindow):
                 logging.error(f"Veritabanı oluşturulamadı: {str(e)}")
                 QMessageBox.critical(self, "Hata", f"Veritabanı oluşturulamadı: {str(e)}")
                 sys.exit(1)
+        self.create_or_update_tables()
 
-        # Veritabanı tablolarını oluştur veya güncelle
-        self.create_or_update_tables()  # Bu satırın çalışması için metod tanımlı olmalı
-
-        # Diğer başlatma işlemleri
         self.groups = self.load_json_data(self.config["combobox_files"][TRANSLATIONS["group_name"]], DEFAULT_GROUPS)
         self.regions = self.load_json_data(self.config["combobox_files"][TRANSLATIONS["region"]], DEFAULT_REGIONS)
         self.floors = self.load_json_data(self.config["combobox_files"][TRANSLATIONS["floor"]], DEFAULT_FLOORS)
@@ -613,79 +612,6 @@ class InventoryApp(QMainWindow):
         self.autosave_timer.start(self.config["autosave_interval"] * 60000)
 
         self.change_font_size(self.config["font_size"])
-
-    def create_or_update_tables(self):
-        cursor = self.conn.cursor()
-        cursor.execute('''CREATE TABLE IF NOT EXISTS inventory (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            data TEXT NOT NULL,
-                            timestamp TEXT NOT NULL)''')
-        cursor.execute('''CREATE TABLE IF NOT EXISTS archive (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            data TEXT NOT NULL,
-                            timestamp TEXT NOT NULL)''')
-        cursor.execute('''CREATE TABLE IF NOT EXISTS metadata (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            column_name TEXT NOT NULL,
-                            section TEXT NOT NULL,
-                            type TEXT NOT NULL,
-                            combobox_file TEXT,
-                            column_order INTEGER NOT NULL)''')
-
-        cursor.execute("SELECT column_name FROM metadata")
-        existing_columns = [row[0] for row in cursor.fetchall()]
-        default_columns = [
-            ("Demirbaş Kodu", TRANSLATIONS["card_info"], "Metin", None, 1),
-            (TRANSLATIONS["group_name"], TRANSLATIONS["card_info"], "ComboBox", self.config["combobox_files"][TRANSLATIONS["group_name"]], 2),
-            (TRANSLATIONS["item_name"], TRANSLATIONS["card_info"], "Metin", None, 3),
-            (TRANSLATIONS["region"], TRANSLATIONS["card_info"], "ComboBox", self.config["combobox_files"][TRANSLATIONS["region"]], 4),
-            (TRANSLATIONS["floor"], TRANSLATIONS["card_info"], "ComboBox", self.config["combobox_files"][TRANSLATIONS["floor"]], 5),
-            (TRANSLATIONS["quantity"], TRANSLATIONS["card_info"], "Metin", None, 6),
-            ("Edinim Tarihi", TRANSLATIONS["card_info"], "Tarih", None, 7),
-            (TRANSLATIONS["photo"], TRANSLATIONS["card_info"], "Metin", None, 8),
-            (TRANSLATIONS["brand"], TRANSLATIONS["invoice_info"], "Metin", None, 9),
-            (TRANSLATIONS["model"], TRANSLATIONS["invoice_info"], "Metin", None, 10),
-            (TRANSLATIONS["invoice_no"], TRANSLATIONS["invoice_info"], "Metin", None, 11),
-            ("Bağışçı", TRANSLATIONS["invoice_info"], "Metin", None, 12),
-            (TRANSLATIONS["company"], TRANSLATIONS["invoice_info"], "Metin", None, 13),
-            ("Özellikler", TRANSLATIONS["invoice_info"], "Metin", None, 14),
-            (TRANSLATIONS["status"], TRANSLATIONS["service_info"], "Metin", None, 15),
-            (TRANSLATIONS["warranty_period"], TRANSLATIONS["service_info"], "Tarih", None, 16),
-            (TRANSLATIONS["description"], TRANSLATIONS["service_info"], "Metin", None, 17)
-        ]
-
-        for column_name, section, param_type, combobox_file, order in default_columns:
-            if column_name not in existing_columns:
-                cursor.execute("INSERT INTO metadata (column_name, section, type, combobox_file, column_order) VALUES (?, ?, ?, ?, ?)",
-                               (column_name, section, param_type, combobox_file, order))
-        self.conn.commit()
-        logging.info("Veritabanı tabloları oluşturuldu veya güncellendi.")
-
-    def quick_search(self, text):
-        for row in range(self.table.rowCount()):
-            match = False
-            for col in range(self.table.columnCount()):
-                item = self.table.item(row, col)
-                if item and text.lower() in item.text().lower():
-                    match = True
-                    break
-            self.table.setRowHidden(row, not match)
-
-    def filter_data(self, group):
-        if group == "Tümü":
-            for row in range(self.table.rowCount()):
-                self.table.setRowHidden(row, False)
-        else:
-            group_idx = self.get_column_headers().index(TRANSLATIONS["group_name"])
-            for row in range(self.table.rowCount()):
-                item = self.table.item(row, group_idx)
-                self.table.setRowHidden(row, item.text() != group if item else True)
-
-    def get_column_headers(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT column_name FROM metadata ORDER BY column_order")
-        return [row[0] for row in cursor.fetchall()]
-
 
     def copy_initial_files(self):
         """ Paket içindeki başlangıç dosyalarını config'deki files_dir'e kopyalar """
@@ -1821,50 +1747,66 @@ class InventoryApp(QMainWindow):
         if "Demirbaş Kodu" in self.card_entries:
             self.card_entries["Demirbaş Kodu"].setText("Otomatik")
 
-def open_edit_dialog(self):
-    selected = self.table.selectedItems()
-    if not selected:
-        QMessageBox.warning(self, "Hata", TRANSLATIONS["error_select_row"])
-        return
-    row = self.table.currentRow()
-    row_data = [self.table.item(row, col) for col in range(self.table.columnCount())]
-    dialog = EditDialog(self, row_data, self.get_column_headers())
-    if dialog.exec_() == QDialog.Accepted:
-        new_data = dialog.get_data()
-        headers = self.get_column_headers()
-        
-        # Grup, bölge ve kat değiştiyse kodu güncelle
-        group_idx = headers.index(TRANSLATIONS["group_name"])
-        region_idx = headers.index(TRANSLATIONS["region"])
-        floor_idx = headers.index(TRANSLATIONS["floor"])
-        code_idx = headers.index("Demirbaş Kodu")
-        
-        new_group = new_data[group_idx]
-        new_region = new_data[region_idx]
-        new_floor = new_data[floor_idx]
-        
-        # Yeni kodu oluştur
-        new_code = self.generate_inventory_code(new_group, new_region, new_floor)
-        new_data[code_idx] = new_code
-        
-        row_id = row_data[0].data(Qt.UserRole)
-        cursor = self.conn.cursor()
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        try:
-            # Eski kaydı sil
-            cursor.execute("DELETE FROM inventory WHERE id = ?", (row_id,))
+    def open_edit_dialog(self):
+        selected = self.table.selectedItems()
+        if not selected:
+            QMessageBox.warning(self, "Hata", TRANSLATIONS["error_select_row"])
+            return
+        row = self.table.currentRow()
+        row_data = [self.table.item(row, col) for col in range(self.table.columnCount())]
+        dialog = EditDialog(self, row_data, self.get_column_headers())
+        if dialog.exec_() == QDialog.Accepted:
+            new_data = dialog.get_data()
+            headers = self.get_column_headers()
             
-            # Yeni kaydı ekle (add_item gibi)
-            cursor.execute("INSERT INTO inventory (data, timestamp) VALUES (?, ?)",
-                          (json.dumps(new_data), timestamp))
+            # Grup, bölge ve kat değiştiyse kodu güncelle
+            group_idx = headers.index(TRANSLATIONS["group_name"])
+            region_idx = headers.index(TRANSLATIONS["region"])
+            floor_idx = headers.index(TRANSLATIONS["floor"])
+            code_idx = headers.index("Demirbaş Kodu")
+            photo_idx = headers.index(TRANSLATIONS["photo"])
             
-            self.conn.commit()
-            self.load_data_from_db()
-            QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_updated"])
-            logging.info(f"Envanter güncellendi: Eski ID {row_id}, Yeni Kod: {new_code}")
-        except sqlite3.Error as e:
-            logging.error(f"Veritabanı güncelleme hatası: {str(e)}")
-            QMessageBox.critical(self, "Hata", f"Veritabanı güncellenemedi: {str(e)}")
+            new_group = new_data[group_idx]
+            new_region = new_data[region_idx]
+            new_floor = new_data[floor_idx]
+            
+            # Yeni kodu oluştur
+            new_code = self.generate_inventory_code(new_group, new_region, new_floor)
+            new_data[code_idx] = new_code
+            
+            # Eski fotoğrafı kontrol et ve gerekirse temizle
+            row_id = row_data[0].data(Qt.UserRole)
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT data FROM inventory WHERE id = ?", (row_id,))
+            old_data = json.loads(cursor.fetchone()[0])
+            old_photo = old_data[photo_idx] if photo_idx < len(old_data) else ""
+            new_photo = new_data[photo_idx]
+            
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                # Eski kaydı sil
+                cursor.execute("DELETE FROM inventory WHERE id = ?", (row_id,))
+                
+                # Yeni kaydı ekle
+                cursor.execute("INSERT INTO inventory (data, timestamp) VALUES (?, ?)",
+                              (json.dumps(new_data), timestamp))
+                
+                self.conn.commit()
+                self.load_data_from_db()
+                
+                # Eski fotoğraf dosyası yeni fotoğraftan farklıysa ve hala varsa, sil (isteğe bağlı)
+                if old_photo and old_photo != new_photo and os.path.exists(os.path.join(self.config["photos_dir"], old_photo)):
+                    try:
+                        os.remove(os.path.join(self.config["photos_dir"], old_photo))
+                        logging.info(f"Eski fotoğraf silindi: {old_photo}")
+                    except OSError as e:
+                        logging.error(f"Eski fotoğraf silinemedi: {str(e)}")
+                
+                QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_updated"])
+                logging.info(f"Envanter güncellendi: Eski ID {row_id}, Yeni Kod: {new_code}, Fotoğraf: {new_photo}")
+            except sqlite3.Error as e:
+                logging.error(f"Veritabanı güncelleme hatası: {str(e)}")
+                QMessageBox.critical(self, "Hata", f"Veritabanı güncellenemedi: {str(e)}")
 
     def archive_item_with_confirmation(self):
         selected = self.table.selectedItems()
@@ -3060,6 +3002,25 @@ def open_edit_dialog(self):
         dialog = ComboBoxEditDialog(self, title=title, items=items, file_path=file_path)
         dialog.exec_()
 
+    def quick_search(self, text):
+        for row in range(self.table.rowCount()):
+            match = False
+            for col in range(self.table.columnCount()):
+                item = self.table.item(row, col)
+                if item and text.lower() in item.text().lower():
+                    match = True
+                    break
+            self.table.setRowHidden(row, not match)
+
+    def filter_data(self, group):
+        if group == "Tümü":
+            for row in range(self.table.rowCount()):
+                self.table.setRowHidden(row, False)
+        else:
+            group_idx = self.get_column_headers().index(TRANSLATIONS["group_name"])
+            for row in range(self.table.rowCount()):
+                item = self.table.item(row, group_idx)
+                self.table.setRowHidden(row, item.text() != group if item else True)
 
     def save_current_form(self):
         logging.info("Form otomatik olarak kaydedildi.")
@@ -3068,6 +3029,56 @@ def open_edit_dialog(self):
         self.conn.close()
         QApplication.quit()
 
+    def create_or_update_tables(self):
+        cursor = self.conn.cursor()
+        cursor.execute('''CREATE TABLE IF NOT EXISTS inventory (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            data TEXT NOT NULL,
+                            timestamp TEXT NOT NULL)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS archive (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            data TEXT NOT NULL,
+                            timestamp TEXT NOT NULL)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS metadata (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            column_name TEXT NOT NULL,
+                            section TEXT NOT NULL,
+                            type TEXT NOT NULL,
+                            combobox_file TEXT,
+                            column_order INTEGER NOT NULL)''')
+
+        cursor.execute("SELECT column_name FROM metadata")
+        existing_columns = [row[0] for row in cursor.fetchall()]
+        default_columns = [
+            ("Demirbaş Kodu", TRANSLATIONS["card_info"], "Metin", None, 1),
+            (TRANSLATIONS["group_name"], TRANSLATIONS["card_info"], "ComboBox", self.config["combobox_files"][TRANSLATIONS["group_name"]], 2),
+            (TRANSLATIONS["item_name"], TRANSLATIONS["card_info"], "Metin", None, 3),
+            (TRANSLATIONS["region"], TRANSLATIONS["card_info"], "ComboBox", self.config["combobox_files"][TRANSLATIONS["region"]], 4),
+            (TRANSLATIONS["floor"], TRANSLATIONS["card_info"], "ComboBox", self.config["combobox_files"][TRANSLATIONS["floor"]], 5),
+            (TRANSLATIONS["quantity"], TRANSLATIONS["card_info"], "Metin", None, 6),
+            ("Edinim Tarihi", TRANSLATIONS["card_info"], "Tarih", None, 7),
+            (TRANSLATIONS["photo"], TRANSLATIONS["card_info"], "Metin", None, 8),
+            (TRANSLATIONS["brand"], TRANSLATIONS["invoice_info"], "Metin", None, 9),
+            (TRANSLATIONS["model"], TRANSLATIONS["invoice_info"], "Metin", None, 10),
+            (TRANSLATIONS["invoice_no"], TRANSLATIONS["invoice_info"], "Metin", None, 11),
+            ("Bağışçı", TRANSLATIONS["invoice_info"], "Metin", None, 12),
+            (TRANSLATIONS["company"], TRANSLATIONS["invoice_info"], "Metin", None, 13),
+            ("Özellikler", TRANSLATIONS["invoice_info"], "Metin", None, 14),
+            (TRANSLATIONS["status"], TRANSLATIONS["service_info"], "Metin", None, 15),
+            (TRANSLATIONS["warranty_period"], TRANSLATIONS["service_info"], "Tarih", None, 16),
+            (TRANSLATIONS["description"], TRANSLATIONS["service_info"], "Metin", None, 17)
+        ]
+
+        for column_name, section, param_type, combobox_file, order in default_columns:
+            if column_name not in existing_columns:
+                cursor.execute("INSERT INTO metadata (column_name, section, type, combobox_file, column_order) VALUES (?, ?, ?, ?, ?)",
+                               (column_name, section, param_type, combobox_file, order))
+        self.conn.commit()
+
+    def get_column_headers(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT column_name FROM metadata ORDER BY column_order")
+        return [row[0] for row in cursor.fetchall()]
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

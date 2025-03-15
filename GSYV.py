@@ -2497,7 +2497,7 @@ class InventoryApp(QMainWindow):
                     elements.append(date)
 
                     # Logo (dinamik yol: files_dir içinden)
-                    logo_path = self.config["logo_path"]
+                    logo_path = "C:/GSYV-main/logo.png"
                     if os.path.exists(logo_path):
                         logo = Image(logo_path, width=2 * cm, height=2 * cm)
                         logo.hAlign = 'CENTER'
@@ -3200,6 +3200,7 @@ if __name__ == "__main__":
     window = InventoryApp()
     window.show()
     sys.exit(app.exec_())
+
 
 
 

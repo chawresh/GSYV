@@ -56,7 +56,7 @@ logging.basicConfig(filename=os.path.join(BASE_DIR, 'inventory.log'),
 # Sabitler
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 DB_FILE = os.path.join(BASE_DIR, "inventory.db")
-LOGO_FILE = resource_path(os.path.join("files", "logo.png"))  # Statik dosya, paket içinde
+LOGO_FILE = "C:/GSYV-main/logo.png"
 
 # Türkçe çeviriler
 TRANSLATIONS = {
@@ -529,8 +529,8 @@ class InventoryApp(QMainWindow):
 
         self.os_name = platform.system()
         self.default_font = "DejaVuSans"  # Başlangıçta tercih edilen font
-        dejavu_font_path = resource_path("files/DejaVuSans.ttf")
-        helvetica_font_path = resource_path("files/Helvetica.ttf")
+        dejavu_font_path = "C:/GSYV-main/DejaVuSans.ttf"
+        helvetica_font_path = "C:/GSYV-main/Helvetica.ttf"
 
         try:
             if os.path.exists(dejavu_font_path):
@@ -1328,7 +1328,7 @@ class InventoryApp(QMainWindow):
         container_layout.setSpacing(15)
 
         # PDF'teki gibi dinamik logo ekleme
-        logo_path = self.config.get("logo_path", os.path.join(self.config.get("files_dir", os.path.join(BASE_DIR, "files")), "logo.png"))
+        logo_path = "C:/GSYV-main/logo.png"
         if os.path.exists(logo_path):
             logo_label = QLabel()
             pixmap = QPixmap(logo_path)
@@ -2046,7 +2046,7 @@ class InventoryApp(QMainWindow):
 
                 # Font kontrolü ve Türkçe karakter desteği
                 if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames():
-                    font_path = resource_path(os.path.join("files", "DejaVuSans.ttf"))
+                    font_path = "C:/GSYV-main/DejaVuSans.ttf"
                     if os.path.exists(font_path):
                         pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
                         logging.info(f"DejaVuSans.ttf yüklendi: {font_path}")
@@ -2335,7 +2335,7 @@ class InventoryApp(QMainWindow):
 
                     # Font kontrolü ve Türkçe karakter desteği
                     if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames():
-                        font_path = resource_path(os.path.join("files", "DejaVuSans.ttf"))
+                        font_path = "C:/GSYV-main/DejaVuSans.ttf"
                         if os.path.exists(font_path):
                             pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
                             logging.info(f"DejaVuSans.ttf yüklendi: {font_path}")
@@ -3096,5 +3096,4 @@ if __name__ == "__main__":
     window = InventoryApp()
     window.show()
     sys.exit(app.exec_())
-
 

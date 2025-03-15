@@ -1783,7 +1783,7 @@ class InventoryApp(QMainWindow):
             new_code = self.generate_inventory_code(new_group, new_region, new_floor)
             new_data[code_idx] = new_code
             
-            # Eski fotoğrafı kontrol et ve temizle
+            # Eski veriyi al ve fotoğrafı kontrol et
             row_id = row_data[0].data(Qt.UserRole)
             cursor = self.conn.cursor()
             cursor.execute("SELECT data FROM inventory WHERE id = ?", (row_id,))
@@ -1793,13 +1793,10 @@ class InventoryApp(QMainWindow):
             
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             try:
-                # Eski kaydı sil
-                cursor.execute("DELETE FROM inventory WHERE id = ?", (row_id,))
+                # Eski kaydı güncelle (silmek yerine)
+                cursor.execute("UPDATE inventory SET data = ?, timestamp = ? WHERE id = ?",
+                              (json.dumps(new_data), timestamp, row_id))
                 
-                # Yeni kaydı ekle
-                cursor.execute("INSERT INTO inventory (data, timestamp) VALUES (?, ?)",
-                              (json.dumps(new_data), timestamp))
-"""                
                 # Eski fotoğrafı temizle (eğer yeni fotoğraftan farklıysa ve varsa)
                 if old_photo and old_photo != new_photo:
                     old_photo_path = os.path.join(self.config["photos_dir"], old_photo)
@@ -1810,11 +1807,11 @@ class InventoryApp(QMainWindow):
                         except OSError as e:
                             logging.error(f"Eski fotoğraf silinemedi: {str(e)}")
                             QMessageBox.warning(self, "Uyarı", f"Eski fotoğraf silinemedi: {str(e)}")
-                """
+                
                 self.conn.commit()
                 self.load_data_from_db()
                 QMessageBox.information(self, "Başarılı", TRANSLATIONS["item_updated"])
-                logging.info(f"Envanter güncellendi: Eski ID {row_id}, Yeni Kod: {new_code}, Fotoğraf: {new_photo}")
+                logging.info(f"Envanter güncellendi: ID {row_id}, Yeni Kod: {new_code}, Fotoğraf: {new_photo}")
             except sqlite3.Error as e:
                 logging.error(f"Veritabanı güncelleme hatası: {str(e)}")
                 QMessageBox.critical(self, "Hata", f"Veritabanı güncellenemedi: {str(e)}")

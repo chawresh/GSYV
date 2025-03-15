@@ -661,6 +661,27 @@ class InventoryApp(QMainWindow):
         self.conn.commit()
         logging.info("Veritabanı tabloları oluşturuldu veya güncellendi.")
 
+    def quick_search(self, text):
+        for row in range(self.table.rowCount()):
+            match = False
+            for col in range(self.table.columnCount()):
+                item = self.table.item(row, col)
+                if item and text.lower() in item.text().lower():
+                    match = True
+                    break
+            self.table.setRowHidden(row, not match)
+
+    def filter_data(self, group):
+        if group == "Tümü":
+            for row in range(self.table.rowCount()):
+                self.table.setRowHidden(row, False)
+        else:
+            group_idx = self.get_column_headers().index(TRANSLATIONS["group_name"])
+            for row in range(self.table.rowCount()):
+                item = self.table.item(row, group_idx)
+                self.table.setRowHidden(row, item.text() != group if item else True)
+
+
     def copy_initial_files(self):
         """ Paket içindeki başlangıç dosyalarını config'deki files_dir'e kopyalar """
         initial_files = {
@@ -3034,25 +3055,6 @@ def open_edit_dialog(self):
         dialog = ComboBoxEditDialog(self, title=title, items=items, file_path=file_path)
         dialog.exec_()
 
-    def quick_search(self, text):
-        for row in range(self.table.rowCount()):
-            match = False
-            for col in range(self.table.columnCount()):
-                item = self.table.item(row, col)
-                if item and text.lower() in item.text().lower():
-                    match = True
-                    break
-            self.table.setRowHidden(row, not match)
-
-    def filter_data(self, group):
-        if group == "Tümü":
-            for row in range(self.table.rowCount()):
-                self.table.setRowHidden(row, False)
-        else:
-            group_idx = self.get_column_headers().index(TRANSLATIONS["group_name"])
-            for row in range(self.table.rowCount()):
-                item = self.table.item(row, group_idx)
-                self.table.setRowHidden(row, item.text() != group if item else True)
 
     def save_current_form(self):
         logging.info("Form otomatik olarak kaydedildi.")

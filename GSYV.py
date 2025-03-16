@@ -1014,7 +1014,9 @@ class InventoryApp(QMainWindow):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSortingEnabled(True)
         self.table.itemDoubleClicked.connect(self.show_details)
+        self.table.resizeColumnsToContents()
         layout.addWidget(self.table)
+        
 
         # Düğmeler
         button_layout = QHBoxLayout()

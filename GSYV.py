@@ -1134,6 +1134,7 @@ class InventoryApp(QMainWindow):
         self.archive_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.archive_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.archive_table.setSortingEnabled(True)
+        self.archive_table.resizeColumnsToContents()
         layout.addWidget(self.archive_table)
 
         button_layout = QHBoxLayout()
